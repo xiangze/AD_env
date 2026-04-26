@@ -1,0 +1,6 @@
+[submodule "UniAD"]
+	path = UniAD
+	url = https://github.com/OpenDriveLab/UniAD
+[submodule "WorldEngine"]
+	path = WorldEngine
+	url = https://github.com/OpenDriveLab/WorldEngine
