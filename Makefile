@@ -10,7 +10,7 @@
 # ② ③ ④ は base さえできれば並列ビルド可能
 # ============================================================
 .PHONY: help build-base build-uniad2 build-algengine build-simengine \
-        build-all build-parallel \
+        build-all build-parallel venv \
         up-uniad2 up-algengine up-simengine up-all \
         train-stage1 train-stage2 train-rl \
         eval-openloop eval-closedloop \
@@ -94,6 +94,11 @@ build-all: build-base build-uniad2 build-algengine build-simengine
 # 使い方: make build-base && make build-parallel -j3
 build-parallel: build-uniad2 build-algengine build-simengine
 
+
+venv:venvs
+	python3.9 -m venv ~/venvs/uniad2
+	python3.9 -m venv ~/venvs/algengine
+	python3.9 -m venv ~/venvs/simengine
 # ────────────────────────────────────────────────────────────
 # 起動
 # ────────────────────────────────────────────────────────────

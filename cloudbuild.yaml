@@ -1,0 +1,25 @@
+steps:
+  # ── Docker イメージビルド ──────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_SUF}/trainer:latest'
+      - '.'
+
+  # ── Artifact Registry へプッシュ ─────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_SUF}/trainer:latest'
+
+images:
+  - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_SUF}/trainer:latest'
+
+# ── substitutions のデフォルト値 ──────────────────────────────
+# submit_job.sh から --substitutions=_SUF=myad で上書きされる
+substitutions:
+  _SUF: myad
+
+# ── タイムアウト (UniAD イメージは大きいためデフォルト10分では足りない) ─
+timeout: '3600s'
