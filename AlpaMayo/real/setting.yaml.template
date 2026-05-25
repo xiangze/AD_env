@@ -1,0 +1,46 @@
+# Alpamayo-R1-10B 実モデル評価 — Vertex AI ジョブ設定
+#
+# GPU 選択:
+#   BF16 フルモデル (24GB 必要):
+#     machineType: a2-highgpu-1g, acceleratorType: NVIDIA_TESLA_A100, acceleratorCount: 1
+#   INT4 量子化 (≤16GB):
+#     machineType: n1-standard-8, acceleratorType: NVIDIA_TESLA_T4, acceleratorCount: 1
+#   蒸留 (Teacher 10B + Student 3B 同時):
+#     machineType: a2-highgpu-2g, acceleratorType: NVIDIA_TESLA_A100, acceleratorCount: 2
+
+workerPoolSpecs:
+  - machineSpec:
+      machineType: a2-highgpu-1g
+      acceleratorType: NVIDIA_TESLA_A100
+      acceleratorCount: 1
+    replicaCount: 1
+    containerSpec:
+      imageUri: ${IMAGE}
+      env:
+        - name: AIP_MODEL_DIR
+          value: ${BUCKET}/results/${JOB_NAME}
+        # HuggingFace トークン (本番では Secret Manager 経由を推奨)
+        - name: HF_TOKEN
+          value: ${HF_TOKEN}
+        # 評価設定
+        - name: EVAL_MODE
+          value: "${EVAL_MODE}"
+        - name: EVAL_QUANT
+          value: "${EVAL_QUANT}"
+        - name: EVAL_QUANT_BACKEND
+          value: "${EVAL_QUANT_BACKEND}"
+        - name: EVAL_SAMPLES
+          value: "${EVAL_SAMPLES}"
+        - name: EVAL_FINETUNE_STEPS
+          value: "${EVAL_FINETUNE_STEPS}"
+        - name: EVAL_STUDENT_MODEL
+          value: "${EVAL_STUDENT_MODEL}"
+        - name: EVAL_LORA_R
+          value: "${EVAL_LORA_R}"
+        - name: EVAL_TARGET_DOMAIN
+          value: "${EVAL_TARGET_DOMAIN}"
+        # HuggingFace キャッシュ (モデルウェイト ~22GB)
+        - name: HF_HOME
+          value: /tmp/hf_cache
+        - name: TRANSFORMERS_CACHE
+          value: /tmp/hf_cache
