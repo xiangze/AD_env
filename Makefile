@@ -10,7 +10,7 @@
 # ② ③ ④ は base さえできれば並列ビルド可能
 # ============================================================
 .PHONY: help build-base build-uniad2 build-algengine build-simengine \
-        build-all build-parallel venv \
+        build-all build-parallel \
         up-uniad2 up-algengine up-simengine up-all \
         train-stage1 train-stage2 train-rl \
         eval-openloop eval-closedloop \
@@ -25,12 +25,12 @@ help:
 	@echo "=== UniAD + WorldEngine Docker ==="
 	@echo ""
 	@echo "【ビルド】"
-	@echo "  make build-base       1 ベースイメージ (必ず最初に実行)"
-	@echo "  make build-all        1〜4 を順番にビルド"
-	@echo "  make build-parallel   1の後に2,3,4を並列ビルド (make -j3)"
-	@echo "  make build-uniad2     2 UniAD 事前学習イメージ"
-	@echo "  make build-algengine  3 AlgEngine RL イメージ"
-	@echo "  make build-simengine  4 SimEngine 3DGS イメージ"
+	@echo "  make build-base       ① ベースイメージ (必ず最初に実行)"
+	@echo "  make build-all        ①〜④ を順番にビルド"
+	@echo "  make build-parallel   ①の後に②③④を並列ビルド (make -j3)"
+	@echo "  make build-uniad2     ② UniAD 事前学習イメージ"
+	@echo "  make build-algengine  ③ AlgEngine RL イメージ"
+	@echo "  make build-simengine  ④ SimEngine 3DGS イメージ"
 	@echo ""
 	@echo "【起動】"
 	@echo "  make up-uniad2        UniAD コンテナ起動"
@@ -94,11 +94,6 @@ build-all: build-base build-uniad2 build-algengine build-simengine
 # 使い方: make build-base && make build-parallel -j3
 build-parallel: build-uniad2 build-algengine build-simengine
 
-
-venv:venvs
-	python3.9 -m venv ~/venvs/uniad2
-	python3.9 -m venv ~/venvs/algengine
-	python3.9 -m venv ~/venvs/simengine
 # ────────────────────────────────────────────────────────────
 # 起動
 # ────────────────────────────────────────────────────────────
@@ -197,3 +192,245 @@ build-mmcv-ops-algengine:
 
 build-mmcv-ops-all: build-mmcv-ops-uniad2 build-mmcv-ops-algengine
 	@echo "✓ mmcv CUDA ops built in all containers."
+
+# ────────────────────────────────────────────────────────────
+# 軽量化 (Compression)
+# ────────────────────────────────────────────────────────────
+COMPRESSION_CKPT  ?= ckpts/uniad_base_e2e.pth
+COMPRESSION_CFG   ?= projects/configs/stage2_e2e/base_e2e.py
+VRAM_BUDGET       ?= 12
+
+# FP16 量子化
+compress-fp16:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+	    python3 tools/compression/quantize.py \
+	        --config $(COMPRESSION_CFG) \
+	        --ckpt   $(COMPRESSION_CKPT) \
+	        --mode   fp16 \
+	        --out    ckpts/uniad_fp16.pth
+
+# INT8 動的量子化
+compress-int8:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+	    python3 tools/compression/quantize.py \
+	        --config $(COMPRESSION_CFG) \
+	        --ckpt   $(COMPRESSION_CKPT) \
+	        --mode   int8 \
+	        --out    ckpts/uniad_int8.pth
+
+# 軽量 config 生成 (VRAM_BUDGET GB 向け)
+make-lite-config:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+	    python3 tools/compression/make_lite_config.py \
+	        --base-config $(COMPRESSION_CFG) \
+	        --vram-budget $(VRAM_BUDGET) \
+	        --out-dir     projects/configs/stage2_e2e/
+
+# 全 VRAM プロファイルの config を一括生成
+make-lite-config-all:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+	    python3 tools/compression/make_lite_config.py \
+	        --base-config $(COMPRESSION_CFG) \
+	        --out-dir     projects/configs/stage2_e2e/ \
+	        --all
+
+# ────────────────────────────────────────────────────────────
+# ファインチューニング (Fine-tuning)
+# ────────────────────────────────────────────────────────────
+FT_CKPT    ?= ckpts/uniad_base_e2e.pth
+FT_CFG     ?= projects/configs/stage2_e2e/base_e2e.py
+FT_DATA    ?= data/custom/infos_train.pkl
+FT_GPUS    ?= 4
+FT_EPOCHS  ?= 8
+FT_VRAM    ?= 40
+FT_OUT     ?= work_dirs/finetune_$(shell date +%Y%m%d_%H%M%S)
+
+# データ前処理 (nuScenes / ACDC / カスタム CSV)
+prepare-data-nuscenes:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+	    python3 tools/finetune/prepare_custom_data.py \
+	        --input-format nuscenes \
+	        --data-root    data/nuscenes \
+	        --out-dir      data/custom \
+	        --split        train
+
+prepare-data-acdc:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+	    python3 tools/finetune/prepare_custom_data.py \
+	        --input-format acdc \
+	        --data-root    data/acdc \
+	        --conditions   fog rain night \
+	        --out-dir      data/custom_acdc \
+	        --split        train
+
+# ドメイン適応 FT (Planning Head のみ, 軽量)
+finetune-domain:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+	    python3 tools/finetune/finetune.py \
+	        --mode    domain \
+	        --config  $(FT_CFG) \
+	        --ckpt    $(FT_CKPT) \
+	        --data    $(FT_DATA) \
+	        --gpus    $(FT_GPUS) \
+	        --epochs  $(FT_EPOCHS) \
+	        --vram    $(FT_VRAM) \
+	        --out-dir $(FT_OUT)
+
+# タスク特化 FT (BEV Encoder も更新)
+finetune-task:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+	    python3 tools/finetune/finetune.py \
+	        --mode    task \
+	        --config  $(FT_CFG) \
+	        --ckpt    $(FT_CKPT) \
+	        --data    $(FT_DATA) \
+	        --gpus    $(FT_GPUS) \
+	        --epochs  20 \
+	        --vram    $(FT_VRAM) \
+	        --out-dir $(FT_OUT)
+
+# ────────────────────────────────────────────────────────────
+# GCP ジョブ投入 (Python ベース)
+# ────────────────────────────────────────────────────────────
+gcp-eval:
+	python3 tools/gcp/submit_job.py \
+	    --job-type eval \
+	    --tasks    $(EVAL_TASKS) \
+	    --ckpt     $(GCS_CKPT) \
+	    --gpus     $(N_GPUS)
+
+gcp-finetune:
+	python3 tools/gcp/submit_job.py \
+	    --job-type finetune \
+	    --ft-mode  $(FT_MODE) \
+	    --data     $(GCS_DATA) \
+	    --gpus     $(N_GPUS)
+
+gcp-rl:
+	python3 tools/gcp/submit_job.py \
+	    --job-type rl \
+	    --gpus     8
+
+# ────────────────────────────────────────────────────────────
+# VAD (Vectorized Autonomous Driving)
+# 注意: UniAD とは独立した Python 3.8 / CUDA 11.1 / torch 1.9 環境
+# Dockerfile.vad は Dockerfile.base に依存しない (独自 FROM)
+# ────────────────────────────────────────────────────────────
+VAD_CONFIG ?= projects/configs/VAD/VAD_base_stage_2.py
+VAD_CKPT   ?= ckpts/VAD_base.pth
+VAD_OUT    ?= eval_results/vad_$(shell date +%Y%m%d_%H%M%S)
+
+# VAD イメージビルド (build-base とは独立して実行可能)
+build-vad:
+	docker build \
+	    -f Dockerfile.vad \
+	    -t vad:latest \
+	    .
+	@echo "✓ VAD image built: vad:latest"
+
+# VAD コンテナ起動
+up-vad:
+	$(COMPOSE) --env-file $(ENV_FILE) up -d vad
+
+# VAD-Tiny 学習 (8 GPU)
+train-vad-tiny:
+	$(COMPOSE) --env-file $(ENV_FILE) exec vad \
+	    python3 -m torch.distributed.run \
+	        --nproc_per_node=8 \
+	        --master_port=2333 \
+	        tools/train.py \
+	        projects/configs/VAD/VAD_tiny_stage_2.py \
+	        --launcher pytorch \
+	        --deterministic \
+	        --work-dir work_dirs/vad_tiny
+
+# VAD-Base 学習 (8 GPU)
+train-vad-base:
+	$(COMPOSE) --env-file $(ENV_FILE) exec vad \
+	    python3 -m torch.distributed.run \
+	        --nproc_per_node=8 \
+	        --master_port=2333 \
+	        tools/train.py \
+	        projects/configs/VAD/VAD_base_stage_2.py \
+	        --launcher pytorch \
+	        --deterministic \
+	        --work-dir work_dirs/vad_base
+
+# VAD 評価 (必ず 1 GPU)
+eval-vad:
+	$(COMPOSE) --env-file $(ENV_FILE) exec vad \
+	    python3 /workspace/VAD/eval_scripts/eval_vad.py \
+	        --config  $(VAD_CONFIG) \
+	        --ckpt    $(VAD_CKPT) \
+	        --out-dir $(VAD_OUT) \
+	        --variant base
+
+eval-vad-tiny:
+	$(COMPOSE) --env-file $(ENV_FILE) exec vad \
+	    python3 /workspace/VAD/eval_scripts/eval_vad.py \
+	        --config  projects/configs/VAD/VAD_tiny_stage_2.py \
+	        --ckpt    ckpts/VAD_tiny.pth \
+	        --out-dir $(VAD_OUT) \
+	        --variant tiny
+
+# ────────────────────────────────────────────────────────────
+# 量子化・蒸留後の精度評価
+# ────────────────────────────────────────────────────────────
+COMP_CONFIG  ?= projects/configs/stage2_e2e/base_e2e.py
+COMP_OUT     ?= eval_results/compression_$(shell date +%Y%m%d_%H%M%S)
+
+# UniAD: FP32 / FP16 / INT8 の精度比較
+eval-compression-uniad:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+	    python3 eval_scripts/eval_compressed.py \
+	        --model   uniad \
+	        --config  $(COMP_CONFIG) \
+	        --ckpts   ckpts/uniad_base_e2e.pth:fp32 \
+	                  ckpts/uniad_fp16.pth:fp16 \
+	                  ckpts/uniad_int8.pth:int8 \
+	        --tasks   planning,tracking \
+	        --out-dir $(COMP_OUT)/uniad
+
+# VAD: FP32 / FP16 の精度比較
+eval-compression-vad:
+	$(COMPOSE) --env-file $(ENV_FILE) exec vad \
+	    python3 eval_scripts/eval_compressed.py \
+	        --model    vad \
+	        --variant  base \
+	        --config   projects/configs/VAD/VAD_base_stage_2.py \
+	        --ckpts    ckpts/VAD_base.pth:fp32 \
+	                   ckpts/VAD_base_fp16.pth:fp16 \
+	        --out-dir  $(COMP_OUT)/vad
+
+# UniAD: Teacher(R101) → Student(R50) 蒸留
+distill-uniad:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+	    python3 tools/compression/distill.py \
+	        --model           uniad \
+	        --teacher-config  projects/configs/stage2_e2e/base_e2e.py \
+	        --teacher-ckpt    ckpts/uniad_base_e2e.pth \
+	        --student-config  projects/configs/stage2_e2e/base_e2e_r50.py \
+	        --mode            response \
+	        --gpus            8 \
+	        --epochs          10 \
+	        --out-dir         work_dirs/distill_r101_to_r50
+
+# VAD: Base → Tiny 蒸留
+distill-vad:
+	$(COMPOSE) --env-file $(ENV_FILE) exec vad \
+	    python3 tools/compression/distill.py \
+	        --model           vad \
+	        --teacher-config  projects/configs/VAD/VAD_base_stage_2.py \
+	        --teacher-ckpt    ckpts/VAD_base.pth \
+	        --student-config  projects/configs/VAD/VAD_tiny_stage_2.py \
+	        --mode            response \
+	        --gpus            4 \
+	        --epochs          20 \
+	        --out-dir         work_dirs/distill_vad_base_to_tiny
+
+# 全モデルの量子化 + 評価を一括実行
+eval-all-compression:
+	$(MAKE) compress-fp16
+	$(MAKE) compress-int8
+	$(MAKE) eval-compression-uniad
+	$(MAKE) eval-compression-vad
