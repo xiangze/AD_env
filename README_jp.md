@@ -716,10 +716,7 @@ cd ~/UniAD
 ### 12.1 Stage1: Perception 学習 (20 エポック)
 
 ```bash
-./tools/dist_train.sh \
-    projects/configs/stage1_track_map/base_track_map.py \
-    8 \
-    --work-dir work_dirs/stage1_base
+./tools/dist_train.sh projects/configs/stage1_track_map/base_track_map.py 8  --work-dir work_dirs/stage1_base
 ```
 
 学習するモジュール: BEVFormer / TrackHead / MapHead
@@ -728,16 +725,10 @@ cd ~/UniAD
 
 ```bash
 # 標準設定
-./tools/dist_train.sh \
-    projects/configs/stage2_e2e/base_e2e.py \
-    8 \
-    --work-dir work_dirs/stage2_e2e
+./tools/dist_train.sh projects/configs/stage2_e2e/base_e2e.py 8 --work-dir work_dirs/stage2_e2e
 
 # 稀少条件オーグメンテーション付き
-./tools/dist_train.sh \
-    projects/configs/stage2_e2e/base_e2e_adverse.py \
-    8 \
-    --work-dir work_dirs/stage2_e2e_adverse
+./tools/dist_train.sh projects/configs/stage2_e2e/base_e2e_adverse.py 8 --work-dir work_dirs/stage2_e2e_adverse
 ```
 
 学習するモジュール: 全 Head (TrackHead / MapHead / MotionHead / OccHead / PlanningHead)
