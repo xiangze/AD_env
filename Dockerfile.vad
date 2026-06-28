@@ -51,15 +51,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.8 \
     python3.8-dev \
     python3.8-distutils \
-    python3-pip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ln -sf /usr/bin/python3.8 /usr/local/bin/python3 \
-    && ln -sf /usr/bin/python3.8 /usr/local/bin/python \
-    && pip3 install --upgrade pip
+    && ln -sf /usr/bin/python3.8 /usr/local/bin/python
+
+# ── pip を get-pip.py で確実にインストール ────────────────────
+# python3-pip パッケージ版は古く --upgrade で pip コマンドが壊れる。
+# get-pip.py 経由で python3.8 に直接紐づけた pip を導入する。
+RUN curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py | python3.8 \
+    && ln -sf /usr/local/bin/pip /usr/local/bin/pip3
 
 # setuptools: VAD の setup.py と mmdet3d v0.17.1 に対応するバージョン
+# 60.x 以降は distutils 廃止により setup.py develop が失敗する
 RUN pip install --no-cache-dir "setuptools==59.5.0" wheel
 
 # ── PyTorch 1.9.1 + CUDA 11.1 ──────────────────────────────
