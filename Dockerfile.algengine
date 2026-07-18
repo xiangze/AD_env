@@ -27,6 +27,18 @@ RUN git clone https://github.com/open-mmlab/mmcv.git \
     && git checkout v1.6.2
 
 WORKDIR /build/mmcv
+
+# GPU が見えなくても CUDA ops をコンパイルさせる
+ENV FORCE_CUDA=1 
+ENV MMCV_WITH_OPS=1
+# 自動検出できないので明示(RTX 3080 Ti = sm_86)
+ENV TORCH_CUDA_ARCH_LIST="8.6"
+
+# mmcv ソース(v1.6.2)を配置済みの前提
+RUN cd /bukld/mmcv && \
+    MAX_JOBS=$(nproc) pip install -v -e . && \
+    python -c "from mmcv import _ext; print('mmcv._ext baked in')"
+
 RUN pip install --no-cache-dir --no-build-isolation -r requirements/optional.txt
 # MMCV_WITH_OPS=0: GPU なしでも通る Python-only インストール
 RUN MMCV_WITH_OPS=0 python setup.py develop
