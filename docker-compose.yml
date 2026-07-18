@@ -89,7 +89,7 @@ services:
       bash -c "
         echo 'UniAD v2.0 container ready.';
         echo 'Run: ./tools/dist_train.sh projects/configs/stage2_e2e/base_e2e.py 8';
-        /bin/bash
+        sleep infinity
       "
 
   # ----------------------------------------------------------
@@ -126,7 +126,7 @@ services:
               count: all
               capabilities: [gpu]
     working_dir: /workspace/WorldEngine/projects/AlgEngine
-    command: /bin/bash
+    command: sleep infinity
 
   # ----------------------------------------------------------
   # 3) SimEngine HEAD — Ray クラスタの親ノード

@@ -160,7 +160,7 @@ eval-openloop:
 	$(COMPOSE) --env-file $(ENV_FILE) exec algengine \
 	    bash -c "./scripts/e2e_dist_eval.sh \
 	        configs/worldengine/e2e_uniad_50pct_rlft_rare_log.py \
-	        work_dirs/e2e_uniad_50pct_rlft_rare_log/epoch_8.pth 8"
+	        work_dirs/e2e_uniad_50pct_rlft_rare_log/epoch_8.pth 1"
 
 eval-closedloop:
 	$(COMPOSE) --env-file $(ENV_FILE) exec simengine-head \
