@@ -19,6 +19,8 @@ FROM uniad-worldengine-base:latest
 LABEL maintainer="UniAD+WorldEngine Pipeline"
 LABEL description="UniAD v2.0 pre-training (Stage1 + Stage2)"
 
+ENV PYTHONPATH=/workspace/UniAD:/workspace/UniAD/projects:$PYTHONPATH
+RUN apt-get update && apt-get install -y python3-distutils
 # ── mmcv 1.6.2 ソースビルド ────────────────────────────────
 # Docker ビルド時は GPU がないため CUDA op は含めない。
 # Python パッケージ部分だけを setup.py develop でインストールし、
