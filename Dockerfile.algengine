@@ -35,10 +35,14 @@ ENV MMCV_WITH_OPS=1
 ENV TORCH_CUDA_ARCH_LIST="8.6"
 
 # mmcv ソース(v1.6.2)を配置済みの前提
-RUN pip install --no-cache-dir "setuptools==75.1.0" wheel ninja
-RUN cd /build/mmcv && \
-    MAX_JOBS=4 pip install -v -e .  --no-build-isolation && \
+
+RUN pip install --no-cache-dir "setuptools==75.1.0" wheel ninja && \
+    pip install --no-cache-dir mmcv-full==1.6.2 --no-binary mmcv-full --no-build-isolation && \
     python -c "from mmcv import _ext; print('mmcv._ext baked in')"
+#RUN pip install --no-cache-dir "setuptools==75.1.0" wheel ninja
+# RUN cd /build/mmcv && \
+#     MAX_JOBS=4 pip install -v -e .  --no-build-isolation && \
+#     python -c "from mmcv import _ext; print('mmcv._ext baked in')"
 
 RUN pip install --no-cache-dir --no-build-isolation -r requirements/optional.txt
 # MMCV_WITH_OPS=0: GPU なしでも通る Python-only インストール
