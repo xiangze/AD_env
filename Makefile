@@ -163,6 +163,10 @@ extract-rare:
 # ────────────────────────────────────────────────────────────
 # open loop精度評価
 # ────────────────────────────────────────────────────────────
+UNIAD_EVAL_CFG  ?= projects/configs/stage2_e2e/base_e2e.py
+UNIAD_EVAL_CKPT ?= ckpts/uniad_base_e2e.pth
+UNIAD_EVAL_GPUS ?= 1
+
 eval-uniad-openloop:
 	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
 	  bash -c "cd /workspace/UniAD && \
