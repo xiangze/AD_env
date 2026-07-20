@@ -28,7 +28,6 @@ volumes:
   # TensorBoard / W&B ログ
   logs:
     driver: local
-
 # ── 共通設定 (YAML anchor) ──────────────────────────────────
 x-gpu-base: &gpu-base
   runtime: nvidia
@@ -72,6 +71,8 @@ services:
       - work_dirs:/workspace/UniAD/work_dirs
       - logs:/workspace/UniAD/logs
       - ./projects:/workspace/UniAD/projects_custom  # カスタムコード
+      - ./data/uniad_infos/infos:/workspace/UniAD/data/infos:ro
+      - ./data/uniad_infos/others:/workspace/UniAD/data/others:ro
     environment:
       - CUDA_VISIBLE_DEVICES=${UNIAD_GPUS:-0,1,2,3,4,5,6,7}
       - MASTER_ADDR=${MASTER_ADDR:-localhost}
@@ -204,38 +205,37 @@ services:
   #    UniAD イメージとは完全に独立したイメージを使用
   # ----------------------------------------------------------
   vad:
-    build:
-      context: .
-      dockerfile: Dockerfile.vad
-    image: vad:latest
-    container_name: vad
-    hostname: vad
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=${VAD_GPUS:-0}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    shm_size: "16g"
-    volumes:
-      # nuScenes (UniAD と共有可能)
-      - ${HOST_DATA_ROOT:-./data}/nuscenes:/workspace/VAD/data/nuscenes:ro
-      # チェックポイント
-      - ${HOST_CKPT_DIR:-./ckpts}/vad:/workspace/VAD/ckpts
-      # 評価結果
-      - ${HOST_EVAL_OUT:-./eval_results}/vad:/workspace/VAD/eval_results
-    ipc: host
-    ulimits:
-      memlock: -1
-      stack: 67108864
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1       # VAD 評価は必ず 1 GPU で実行
-              capabilities: [gpu]
-    working_dir: /workspace/VAD
-    command: /bin/bash
-
+      build:
+        context: .
+        dockerfile: Dockerfile.vad
+      image: vad:latest
+      container_name: vad
+      runtime: nvidia
+      environment:
+        - NVIDIA_VISIBLE_DEVICES=${VAD_GPUS:-0}
+        - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      shm_size: "16g"
+      volumes:
+        # nuScenes 本体 + 生成した vad_*.pkl を同じ data/nuscenes に置く
+        - ${HOST_DATA_ROOT:-./data}/nuscenes:/workspace/VAD/data/nuscenes
+        - ${HOST_DATA_ROOT:-./data}/can_bus:/workspace/VAD/data/can_bus:ro
+        - ${HOST_CKPT_DIR:-./ckpts}/vad:/workspace/VAD/ckpts
+        - ./work_dirs/vad:/workspace/VAD/work_dirs
+      ipc: host
+      ulimits:
+        memlock: -1
+        stack: 67108864
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: 1
+                capabilities: [gpu]
+              # VAD 評価は必ず 1 GPU で実行
+      working_dir: /workspace/VAD
+      command: sleep infinity
+      
   # ----------------------------------------------------------
   # 6) TensorBoard (学習モニタリング)
   # ----------------------------------------------------------
@@ -275,3 +275,4 @@ services:
     restart: unless-stopped
     profiles:
       - monitoring   # docker compose --profile monitoring up で起動
+

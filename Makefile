@@ -13,7 +13,7 @@
         build-all build-parallel \
         up-uniad2 up-algengine up-simengine up-all \
         train-stage1 train-stage2 train-rl \
-        eval-openloop eval-closedloop \
+        eval-openloop eval-closedloop eval-uniad-openloop\
         rollout extract-rare tensorboard \
         down clean
 
@@ -47,6 +47,7 @@ help:
 	@echo "  make rollout          SimEngine ロールアウト生成"
 	@echo "  make extract-rare     希少ケース抽出"
 	@echo "  make eval-openloop    Open-loop 評価"
+	@echo "  make eval-uniad-openloop Open-loop 評価(UniAD)"
 	@echo "  make eval-closedloop  Closed-loop 評価"
 	@echo ""
 	@echo "【クリーンアップ】"
@@ -64,6 +65,9 @@ build-base:
 	    -t $(BASE_TAG) \
 	    .
 	@echo "✓ base image built: $(BASE_TAG)"
+
+#build-worldengine-base:
+#	docker build -f Dockerfile.base -t uniad-worldengine-base:latest .
 
 # ② UniAD 事前学習 (build-base が完了してから実行)
 build-uniad2: build-base
@@ -155,6 +159,14 @@ extract-rare:
 	        --pdm-result work_dirs/e2e_uniad_50pct/navtest.csv \
 	        --base-split configs/navsim_splits/navtest_split/navtest.yaml \
 	        --output-dir configs/navsim_splits/navtest_split/e2e_uniad_50pct_rare
+
+# ────────────────────────────────────────────────────────────
+# open loop精度評価
+# ────────────────────────────────────────────────────────────
+eval-uniad-openloop:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+	  bash -c "cd /workspace/UniAD && \
+	    ./tools/uniad_dist_eval.sh $(UNIAD_EVAL_CFG) $(UNIAD_EVAL_CKPT) $(UNIAD_EVAL_GPUS) " 
 
 eval-openloop:
 	$(COMPOSE) --env-file $(ENV_FILE) exec algengine \
@@ -319,18 +331,36 @@ gcp-rl:
 VAD_CONFIG ?= projects/configs/VAD/VAD_base_stage_2.py
 VAD_CKPT   ?= ckpts/VAD_base.pth
 VAD_OUT    ?= eval_results/vad_$(shell date +%Y%m%d_%H%M%S)
+VAD_CONFIG ?= projects/configs/VAD/VAD_base_e2e.py   # ls projects/configs/VAD/ で実名確認
+VAD_CKPT   ?= ckpts/VAD_base.pth
 
-# VAD イメージビルド (build-base とは独立して実行可能)
 build-vad:
-	docker build \
-	    -f Dockerfile.vad \
-	    -t vad:latest \
-	    .
+	docker build -f Dockerfile.vad -t vad:latest .
 	@echo "✓ VAD image built: vad:latest"
-
 # VAD コンテナ起動
 up-vad:
 	$(COMPOSE) --env-file $(ENV_FILE) up -d vad
+
+# nuScenes 用 VAD 専用 info pkl を生成(初回のみ。data/nuscenes へ書き込む)
+prepare-vad-data:
+	$(COMPOSE) --env-file $(ENV_FILE) exec vad bash -c "cd /workspace/VAD && \
+	  python tools/data_converter/vad_nuscenes_converter.py nuscenes \
+	    --root-path ./data/nuscenes --out-dir ./data/nuscenes \
+	    --extra-tag vad_nuscenes --version v1.0-trainval --canbus ./data"
+
+# 評価は単一 GPU・非分散(VAD 公式の指定)
+eval-vad:
+	$(COMPOSE) --env-file $(ENV_FILE) exec vad bash -c "cd /workspace/VAD && \
+	  CUDA_VISIBLE_DEVICES=0 python tools/test.py $(VAD_CONFIG) $(VAD_CKPT) \
+	    --launcher none --eval bbox --tmpdir tmp"
+
+eval-vad-tiny:
+	$(COMPOSE) --env-file $(ENV_FILE) exec vad \
+	    python3 /workspace/VAD/eval_scripts/eval_vad.py \
+	        --config  projects/configs/VAD/VAD_tiny_stage_2.py \
+	        --ckpt    ckpts/VAD_tiny.pth \
+	        --out-dir $(VAD_OUT) \
+	        --variant tiny
 
 # VAD-Tiny 学習 (8 GPU)
 train-vad-tiny:
@@ -355,23 +385,6 @@ train-vad-base:
 	        --launcher pytorch \
 	        --deterministic \
 	        --work-dir work_dirs/vad_base
-
-# VAD 評価 (必ず 1 GPU)
-eval-vad:
-	$(COMPOSE) --env-file $(ENV_FILE) exec vad \
-	    python3 /workspace/VAD/eval_scripts/eval_vad.py \
-	        --config  $(VAD_CONFIG) \
-	        --ckpt    $(VAD_CKPT) \
-	        --out-dir $(VAD_OUT) \
-	        --variant base
-
-eval-vad-tiny:
-	$(COMPOSE) --env-file $(ENV_FILE) exec vad \
-	    python3 /workspace/VAD/eval_scripts/eval_vad.py \
-	        --config  projects/configs/VAD/VAD_tiny_stage_2.py \
-	        --ckpt    ckpts/VAD_tiny.pth \
-	        --out-dir $(VAD_OUT) \
-	        --variant tiny
 
 # ────────────────────────────────────────────────────────────
 # 量子化・蒸留後の精度評価
