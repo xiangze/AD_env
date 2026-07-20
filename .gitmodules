@@ -4,3 +4,6 @@
 [submodule "WorldEngine"]
 	path = WorldEngine
 	url = https://github.com/OpenDriveLab/WorldEngine
+[submodule "acados"]
+	path = acados
+	url = https://github.com/acados/acados.git
