@@ -172,6 +172,28 @@ eval-uniad-openloop:
 	  bash -c "cd /workspace/UniAD && \
 	    ./tools/uniad_dist_eval.sh $(UNIAD_EVAL_CFG) $(UNIAD_EVAL_CKPT) $(UNIAD_EVAL_GPUS) " 
 
+eval-uniad-openloop-mini:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+		bash -c "cd /workspace/UniAD && \
+		python tools/data_converter/uniad_nuscenes_converter.py nuscenes \
+			--root-path ./data/nuscenes \
+			--canbus ./data/nuscenes \
+			--out-dir ./data/infos \
+			--extra-tag nuscenes \
+			--version v1.0-mini"
+
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
+		bash -c "cd /workspace/UniAD && CUDA_VISIBLE_DEVICES=0 \
+		python tools/test.py projects/configs/stage2_e2e/base_e2e.py \
+		ckpts/uniad_base_e2e.pth --launcher none --eval bbox \
+		--cfg-options data.test.ann_file=data/infos/nuscenes_infos_temporal_val.pkl"
+
+# 	./tools/uniad_dist_eval.sh projects/configs/stage2_e2e/base_e2e.py \
+# 		ckpts/uniad_base_e2e.pth 1 \
+# 		--cfg-options \
+# 		data.test.ann_file=data/infos/nuscenes_infos_temporal_val.pkl \
+# 		data.test.data_root=data/nuscenes/"
+
 eval-openloop:
 	$(COMPOSE) --env-file $(ENV_FILE) exec algengine \
 	    bash -c "./scripts/e2e_dist_eval.sh \
