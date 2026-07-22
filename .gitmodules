@@ -7,3 +7,9 @@
 [submodule "acados"]
 	path = acados
 	url = https://github.com/acados/acados.git
+[submodule "VAD"]
+	path = VAD
+	url = https://github.com/hustvl/VAD.git
+[submodule "sparsedrive"]
+	path = sparsedrive
+	url = https://github.com/swc-17/sparsedrive
