@@ -17,7 +17,9 @@ Docker コンテナで完結させるためのビルド・評価手順書です�
 ├── docker-entrypoint-simengine.sh   # SimEngine Ray 起動スクリプト
 ├── Makefile                         # ビルド・運用コマンド集
 ├── .env.example                     # 環境変数テンプレート
-└── README.md                        # 本ファイル
+├── README.md, README_jp.md          # 全体構成
+└── README_docker_jp.md              # 本ファイル
+
 ```
 
 ### イメージの継承関係
@@ -290,11 +292,19 @@ make down
 **使用コンテナ**: `uniad2`  
 **評価内容**: Tracking / Mapping / Motion / Occupancy / Planning (nuScenes val セット)
 
+[nuscenes学習済みデータ(pkl)](https://huggingface.co/LMD0311/HERMES/tree/3a50b5a568a8032c0a3d4b4341447267eb821185/data)
+```bash
+curl -o data/nuscenes_infos_temporal_train.pkl https://huggingface.co/LMD0311/HERMES/tree/3a50b5a568a8032c0a3d4b4341447267eb821185/data/nuscenes_infos_temporal_train.pkl 
+curl -o data/nuscenes_infos_temporal_eval.pkl  https://huggingface.co/LMD0311/HERMES/tree/3a50b5a568a8032c0a3d4b4341447267eb821185/data/nuscenes_infos_temporal_eval.pkl 
+```
+
 ```bash
 # コンテナが起動していない場合は先に起動
 make up-uniad2
 
 # 評価実行 (8 GPU)
+make eval-uniad-openloop
+#or 
 docker exec -it uniad2 bash -c "
     cd /workspace/UniAD
     ./tools/dist_test.sh \

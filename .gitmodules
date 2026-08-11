@@ -13,3 +13,9 @@
 [submodule "sparsedrive"]
 	path = sparsedrive
 	url = https://github.com/swc-17/sparsedrive
+[submodule "SparseDrive"]
+	path = SparseDrive
+	url = https://github.com/swc-17/SparseDrive.git
+[submodule "BEVFormer"]
+	path = BEVFormer
+	url = https://github.com/fundamentalvision/BEVFormer.git

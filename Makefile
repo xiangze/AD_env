@@ -173,14 +173,14 @@ eval-uniad-openloop:
 	    ./tools/uniad_dist_eval.sh $(UNIAD_EVAL_CFG) $(UNIAD_EVAL_CKPT) $(UNIAD_EVAL_GPUS) " 
 
 eval-uniad-openloop-mini:
-	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
-		bash -c "cd /workspace/UniAD && \
-		python tools/data_converter/uniad_nuscenes_converter.py nuscenes \
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 bash -c \
+		"cd /workspace/UniAD && \
+		python tools/create_data.py nuscenes \
 			--root-path ./data/nuscenes \
-			--canbus ./data/nuscenes \
 			--out-dir ./data/infos \
 			--extra-tag nuscenes \
-			--version v1.0-mini"
+			--version v1.0-mini \
+			--canbus ./data/nuscenes"
 
 	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 \
 		bash -c "cd /workspace/UniAD && CUDA_VISIBLE_DEVICES=0 \
