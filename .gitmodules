@@ -19,3 +19,6 @@
 [submodule "BEVFormer"]
 	path = BEVFormer
 	url = https://github.com/fundamentalvision/BEVFormer.git
+[submodule "DriveArena"]
+	path = DriveArena
+	url = https://github.com/PJLab-ADG/DriveArena
