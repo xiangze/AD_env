@@ -71,7 +71,7 @@ services:
       - work_dirs:/workspace/UniAD/work_dirs
       - logs:/workspace/UniAD/logs
       - ./projects:/workspace/UniAD/projects_custom  # カスタムコード
-      - ./data/uniad_infos/infos:/workspace/UniAD/data/infos:ro
+      - ./data/uniad_infos/infos:/workspace/UniAD/data/infos  #:ro
       - ./data/uniad_infos/others:/workspace/UniAD/data/others:ro
     environment:
       - CUDA_VISIBLE_DEVICES=${UNIAD_GPUS:-0,1,2,3,4,5,6,7}
