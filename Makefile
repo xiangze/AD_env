@@ -20,6 +20,14 @@
 COMPOSE   = docker compose
 ENV_FILE  = .env
 BASE_TAG  = uniad-worldengine-base:latest
+DATA_ROOT ?= /mnt/data
+
+# preare nuscenes mini dataset for eval-uniad-openloop-mini
+prepare-mini:
+	DATA_ROOT=$(DATA_ROOT) ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" ./prepare_mini_data.sh
+
+# ダウンロードだけ手動 → あとは prepare-mini → eval-uniad-openloop の2手
+eval-mini: prepare-mini up-uniad2 eval-uniad-openloop
 
 help:
 	@echo "=== UniAD + WorldEngine Docker ==="
