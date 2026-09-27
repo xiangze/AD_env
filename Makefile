@@ -481,3 +481,64 @@ eval-all-compression:
 	$(MAKE) compress-int8
 	$(MAKE) eval-compression-uniad
 	$(MAKE) eval-compression-vad
+
+
+DATA_ROOT ?= /mnt/data
+CL_COMPOSE = $(COMPOSE) -f docker-compose.yml -f compose.multimodel.yml
+PREP = DATA_ROOT=$(DATA_ROOT) ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" ./prepare_data.sh
+
+# ---- データ準備(生データは1回、info はモデル別) ------------------------
+prep-raw:          ; $(PREP) raw
+prep-uniad:        ; $(PREP) uniad
+prep-vad:          ; $(PREP) vad
+prep-sparsedrive:  ; $(PREP) sparsedrive
+prep-all:          ; $(PREP) all
+
+# ---- UniAD open-loop(nuScenes / 1 GPU) ---------------------------------
+eval-uniad: prep-uniad up-uniad2
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 bash -c \
+	  "cd /workspace/UniAD && ./tools/uniad_dist_eval.sh \
+	   projects/configs/stage2_e2e/base_e2e.py ckpts/uniad_base_e2e.pth 1"
+
+# ---- VAD open-loop(必ず 1 GPU・非分散) --------------------------------
+VAD_CONFIG ?= projects/configs/VAD/VAD_base_e2e.py
+VAD_CKPT   ?= ckpts/VAD_base.pth
+eval-vad: prep-vad
+	$(CL_COMPOSE) --env-file $(ENV_FILE) up -d vad
+	$(CL_COMPOSE) --env-file $(ENV_FILE) exec vad bash -c \
+	  "cd /workspace/VAD && CUDA_VISIBLE_DEVICES=0 \
+	   python tools/test.py $(VAD_CONFIG) $(VAD_CKPT) --launcher none --eval bbox --tmpdir tmp"
+
+# ---- SparseDrive open-loop ---------------------------------------------
+SPARSE_CONFIG ?= projects/configs/sparsedrive_small_stage2.py
+SPARSE_CKPT   ?= ckpts/sparsedrive_stage2.pth
+eval-sparsedrive: prep-sparsedrive
+	$(CL_COMPOSE) --env-file $(ENV_FILE) up -d sparsedrive
+	$(CL_COMPOSE) --env-file $(ENV_FILE) exec sparsedrive bash -c \
+	  "cd /workspace/SparseDrive && CUDA_VISIBLE_DEVICES=0 \
+	   python tools/test.py $(SPARSE_CONFIG) $(SPARSE_CKPT) --eval bbox"
+
+# ---- 3モデルまとめて open-loop -----------------------------------------
+eval-all-openloop: eval-uniad eval-vad eval-sparsedrive
+	@echo "✓ UniAD / VAD / SparseDrive open-loop 評価完了"
+
+# ---- Hydra-NeXt 閉ループ(CARLA 0.9.15 + Bench2Drive) ------------------
+build-closedloop:
+	$(CL_COMPOSE) --env-file $(ENV_FILE) build hydranext
+
+HN_EVALCFG ?= adzoo/vad/configs/hydra_next/hydra_next_eval.py
+HN_CKPT    ?= /workspace/Hydra-NeXt/ckpts/hydra_next.pth
+
+eval-closedloop:
+	$(CL_COMPOSE) --env-file $(ENV_FILE) up -d carla-server hydranext
+	@echo "CARLA 起動待ち(RPC 2000)..."; sleep 20
+	$(CL_COMPOSE) --env-file $(ENV_FILE) exec hydranext bash -c \
+	  "cd \$$BENCH2DRIVE_ROOT && \
+	   TEAM_AGENT=hydra_next_agent.py \
+	   TEAM_CONFIG=$(HN_EVALCFG)+$(HN_CKPT) \
+	   ALGO=hydranext \
+	   CARLA_HOST=carla-server CARLA_PORT=2000 \
+	   bash leaderboard/scripts/run_evaluation_multi_vad.sh"
+
+down-closedloop:
+	$(CL_COMPOSE) --env-file $(ENV_FILE) stop hydranext carla-server

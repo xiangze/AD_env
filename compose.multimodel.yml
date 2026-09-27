@@ -1,0 +1,136 @@
+# ============================================================================
+# compose.multimodel.yml  —  既存 docker-compose.yml に統合する断片
+#
+# 設計:
+#   /mnt/data/nuscenes を「共有生データレイク」として全モデルが ro でマウント。
+#   info pkl だけモデル固有ディレクトリ(/mnt/data/infos/<model>)を rw でマウント。
+#   → 生データ 300GB を1コピーで UniAD/VAD/SparseDrive が共用。
+#
+# 使い方:
+#   docker compose -f docker-compose.yml -f compose.multimodel.yml --env-file .env up -d <svc>
+#   もしくは docker-compose.yml の各サービス volumes をこの方針に合わせて統合。
+# ============================================================================
+services:
+
+  # ---- UniAD(既存 uniad2 の volumes をこの形へ) --------------------------
+  uniad2:
+    volumes:
+      - type: bind
+        source: /mnt/data/nuscenes
+        target: /workspace/UniAD/data/nuscenes
+        read_only: true
+      - type: bind
+        source: /mnt/data/infos/uniad
+        target: /workspace/UniAD/data/infos
+        bind: { create_host_path: true }
+      - type: bind
+        source: /mnt/data/others
+        target: /workspace/UniAD/data/others
+        bind: { create_host_path: true }
+      - type: bind
+        source: /mnt/ckpts/uniad
+        target: /workspace/UniAD/ckpts
+        read_only: true
+        bind: { create_host_path: true }
+
+  # ---- VAD --------------------------------------------------------------
+  vad:
+    volumes:
+      - type: bind
+        source: /mnt/data/nuscenes
+        target: /workspace/VAD/data/nuscenes
+        read_only: true
+      - type: bind
+        source: /mnt/data/infos/vad
+        target: /workspace/VAD/data/infos
+        bind: { create_host_path: true }
+      - type: bind
+        source: /mnt/ckpts/vad
+        target: /workspace/VAD/ckpts
+        read_only: true
+        bind: { create_host_path: true }
+    command: sleep infinity
+
+  # ---- SparseDrive ------------------------------------------------------
+  sparsedrive:
+    build:
+      context: .
+      dockerfile: Dockerfile.sparsedrive
+    image: sparsedrive:latest
+    container_name: sparsedrive
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${SPARSE_GPUS:-0}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    shm_size: "16g"
+    volumes:
+      - type: bind
+        source: /mnt/data/nuscenes
+        target: /workspace/SparseDrive/data/nuscenes
+        read_only: true
+      - type: bind
+        source: /mnt/data/infos/sparsedrive
+        target: /workspace/SparseDrive/data/infos
+        bind: { create_host_path: true }
+      - type: bind
+        source: /mnt/ckpts/sparsedrive
+        target: /workspace/SparseDrive/ckpts
+        read_only: true
+        bind: { create_host_path: true }
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    working_dir: /workspace/SparseDrive
+    command: sleep infinity
+
+  # ---- CARLA サーバ(Hydra-NeXt 閉ループ用。バージョン固定) ---------------
+  carla-server:
+    image: carlasim/carla:0.9.15
+    container_name: carla-server
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${CL_GPUS:-0}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+    command: ./CarlaUE4.sh -RenderOffScreen -nosound -carla-rpc-port=2000
+    ports: ["2000-2002:2000-2002"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+
+  # ---- Hydra-NeXt クライアント(閉ループエージェント) --------------------
+  hydranext:
+    build:
+      context: .
+      dockerfile: Dockerfile.closedloop
+      args:
+        CARLA_VERSION: "0.9.15"
+        BENCH2DRIVE_REF: "main"        # ← 実際に固定したいコミットSHAへ
+        HYDRANEXT_REF: "master"        # ← 同上
+    image: hydranext-closedloop:latest
+    container_name: hydranext
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${CL_GPUS:-0}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+      - CARLA_ROOT=/workspace/carla
+      - CARLA_HOST=carla-server         # RPC 先(compose ネットワーク内名前解決)
+      - CARLA_PORT=2000
+    shm_size: "16g"
+    volumes:
+      - type: bind
+        source: /mnt/ckpts/hydranext
+        target: /workspace/Hydra-NeXt/ckpts
+        read_only: true
+        bind: { create_host_path: true }
+      - work_dirs:/workspace/Hydra-NeXt/work_dirs
+    depends_on: [carla-server]
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    working_dir: /workspace/Hydra-NeXt
+    command: sleep infinity
