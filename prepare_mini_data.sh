@@ -96,3 +96,17 @@ $COMPOSE --env-file "$ENV_FILE" exec -T uniad2 python -c \
    print('version:', d['metadata']['version'], ' infos:', len(d['infos']))"
 
 log "done. now run:  make eval-uniad-openloop"
+
+# --- 2.5 map expansion(ベクターマップ JSON) -------------------------------
+if [ -f "$NUSC/maps/expansion/boston-seaport.json" ]; then
+  skip "map expansion already extracted"
+else
+  MAPZIP=$(ls "$DOWNLOADS"/nuScenes-map-expansion-*.zip 2>/dev/null | head -1 || true)
+  [ -n "$MAPZIP" ] || {
+    echo "ERROR: $DOWNLOADS に nuScenes-map-expansion-*.zip がありません。" \
+         "nuScenes の Map expansion を取得して置いてください。" >&2
+    exit 1
+  }
+  log "extracting $(basename "$MAPZIP") -> $NUSC/maps"
+  unzip -q -o "$MAPZIP" -d "$NUSC/maps"
+fi
