@@ -1,0 +1,89 @@
+# ============================================================================
+# Dockerfile.closedloop  —  Hydra-NeXt 閉ループ評価 (CARLA 0.9.15 + Bench2Drive)
+#
+# 位置づけ:
+#   既存 Dockerfile.simengine は WorldEngine の 3DGS 閉ループ(nuScenes/nuPlan 系)で、
+#   Hydra-NeXt(CARLA/Bench2Drive)とは別系統。混在させると壊れやすいので、
+#   閉ループ CARLA 評価はこの専用イメージに分離する。Makefile の eval-closedloop
+#   をこのイメージ + CARLA サーバへ向ける。
+#
+# バージョン固定(ここが今回の主眼):
+#   CARLA        : 0.9.15
+#   Bench2Drive  : 固定コミット(下 ARG)
+#   Hydra-NeXt   : 固定コミット(下 ARG)
+#   Python 3.8 / CUDA 11.8 / torch cu118  (Bench2DriveZoo 準拠, gcc-9)
+#
+# CARLA 本体(サーバ)はこのイメージに含めない。carlasim/carla:0.9.15 を別サービスで起動し、
+# 本イメージは「エージェント/クライアント側」として PythonAPI(egg)を通信に使う。
+# ============================================================================
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu20.04
+
+ARG BENCH2DRIVE_REF=main
+ARG HYDRANEXT_REF=master
+ARG CARLA_VERSION=0.9.15
+
+ENV DEBIAN_FRONTEND=noninteractive TZ=Asia/Tokyo \
+    LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    CARLA_VERSION=${CARLA_VERSION}
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+SHELL ["/bin/bash", "-c"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build git git-lfs wget curl unzip ca-certificates \
+        gcc-9 g++-9 \
+        python3.8 python3.8-dev python3.8-distutils \
+        libgl1-mesa-glx libglib2.0-0 libgeos-dev libsm6 libxext6 libxrender-dev \
+        libjpeg-dev libpng-dev libtiff-dev \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 60 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 60 \
+    && ln -sf /usr/bin/python3.8 /usr/local/bin/python \
+    && ln -sf /usr/bin/python3.8 /usr/local/bin/python3 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py | python3.8 \
+    && pip install --no-cache-dir "setuptools==59.5.0" wheel
+
+ENV CUDA_HOME=/usr/local/cuda PATH=/usr/local/cuda/bin:${PATH} \
+    FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST="8.6"
+
+# torch cu118(Bench2DriveZoo / Hydra-NeXt 準拠)
+RUN pip install --no-cache-dir \
+        torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 \
+        --index-url https://download.pytorch.org/whl/cu118
+RUN pip install --no-cache-dir ninja packaging
+
+# --- CARLA 0.9.15 PythonAPI(egg + agents)。サーバ本体は別コンテナ ---
+WORKDIR /workspace
+RUN wget -q https://carla-releases.s3.us-east-005.backblazeb2.com/Linux/CARLA_${CARLA_VERSION}.tar.gz \
+      -O /tmp/carla.tgz \
+    && mkdir -p carla && tar -xzf /tmp/carla.tgz -C carla \
+    && rm /tmp/carla.tgz
+ENV CARLA_ROOT=/workspace/carla
+# PythonAPI egg を site へ通す(py3.8 でも動作)
+RUN echo "$CARLA_ROOT/PythonAPI/carla/dist/carla-${CARLA_VERSION}-py3.7-linux-x86_64.egg" \
+      > /usr/local/lib/python3.8/dist-packages/carla.pth \
+    && pip install --no-cache-dir \
+        "$CARLA_ROOT/PythonAPI/carla" 2>/dev/null || true
+
+# --- Bench2Drive(固定コミット。leaderboard / scenario_runner を含む) ---
+RUN git clone https://github.com/Thinklab-SJTU/Bench2Drive.git \
+    && cd Bench2Drive && git checkout ${BENCH2DRIVE_REF}
+ENV BENCH2DRIVE_ROOT=/workspace/Bench2Drive
+
+# --- Hydra-NeXt(固定コミット。バンドル mmcv + CUDA op をここでビルド) ---
+RUN git clone https://github.com/woxihuanjiangguo/Hydra-NeXt.git \
+    && cd Hydra-NeXt && git checkout ${HYDRANEXT_REF}
+WORKDIR /workspace/Hydra-NeXt
+RUN pip install --no-cache-dir -v -e . --no-build-isolation \
+    && pip install --no-cache-dir --upgrade "diffusers[torch]"
+
+# バックボーン置き場(重みは実行時マウント推奨)
+RUN mkdir -p ckpts
+
+# leaderboard / scenario_runner を PYTHONPATH へ
+ENV PYTHONPATH=/workspace/Hydra-NeXt:${BENCH2DRIVE_ROOT}/leaderboard:${BENCH2DRIVE_ROOT}/scenario_runner:${CARLA_ROOT}/PythonAPI/carla:${PYTHONPATH:-}
+
+RUN cd /tmp && python -c "import torch;print('torch',torch.__version__,'cuda',torch.version.cuda)"
+
+WORKDIR /workspace/Hydra-NeXt
+CMD ["sleep", "infinity"]
