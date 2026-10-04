@@ -1,0 +1,35 @@
+# ============================================================================
+# Makefile.sparsedrivev2  —  既存 Makefile へ追記(NAVSIM ベース)
+#   データキャッシュ → メトリックキャッシュ → 評価(PDMS/EPDMS)
+# ============================================================================
+SV2_COMPOSE = $(COMPOSE) -f docker-compose.yml -f compose.sparsedrivev2.yml
+
+build-sparsedrivev2:
+	$(SV2_COMPOSE) --env-file $(ENV_FILE) build sparsedrivev2
+
+up-sparsedrivev2:
+	$(SV2_COMPOSE) --env-file $(ENV_FILE) up -d sparsedrivev2
+
+# --- データ/メトリックキャッシュ(初回に1回。navtrain/navtest) ----------
+sv2-cache:
+	$(SV2_COMPOSE) --env-file $(ENV_FILE) exec sparsedrivev2 bash -c \
+	  "cd /workspace/SparseDriveV2 && \
+	   sh scripts/cache/run_dataset_caching_navtest.sh && \
+	   sh scripts/cache/run_metric_caching_navtest_v2.sh"
+
+sv2-cache-train:
+	$(SV2_COMPOSE) --env-file $(ENV_FILE) exec sparsedrivev2 bash -c \
+	  "cd /workspace/SparseDriveV2 && \
+	   sh scripts/cache/run_dataset_caching_navtrain.sh && \
+	   sh scripts/cache/run_metric_caching_navtrain_v2.sh"
+
+# --- 学習(NAVSIMv2) ----------------------------------------------------
+train-sparsedrivev2: up-sparsedrivev2
+	$(SV2_COMPOSE) --env-file $(ENV_FILE) exec sparsedrivev2 bash -c \
+	  "cd /workspace/SparseDriveV2 && sh scripts/training/sparsedrive_navsimv2.sh"
+
+# --- 評価(PDMS/EPDMS, navtest v2) -------------------------------------
+eval-sparsedrivev2: up-sparsedrivev2
+	$(SV2_COMPOSE) --env-file $(ENV_FILE) exec sparsedrivev2 bash -c \
+	  "cd /workspace/SparseDriveV2 && sh scripts/evaluation/run_pdm_score_navtest_v2.sh \
+	   2>&1 | tee /workspace/exp/eval_sparsedrivev2_$$(date +%Y%m%d_%H%M%S).log"

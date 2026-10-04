@@ -1,0 +1,65 @@
+# ============================================================================
+# compose.sparsedrivev2.yml  —  既存 docker-compose.yml に重ねる断片
+#
+#   docker compose -f docker-compose.yml -f compose.sparsedrivev2.yml \
+#                  --env-file .env up -d sparsedrivev2
+#
+# SparseDriveV2 は NAVSIM(OpenScene + nuplan maps)を使う。nuScenes レイクではなく、
+# OpenScene データ(navsim_logs / sensor_blobs)と nuplan maps をマウントする。
+#
+# 想定ホスト配置(OpenScene の標準レイアウト):
+#   /mnt/data/openscene/
+#     ├── navsim_logs/{trainval,test,...}
+#     ├── sensor_blobs/{trainval,test,...}
+#     └── maps/                         (nuplan-maps-v1.0)
+#   /mnt/data/navsim_exp/               (実験・キャッシュ出力 rw)
+#   /mnt/ckpts/sparsedrivev2/           (ResNet-34 backbone / anchor files / 学習済み)
+# ============================================================================
+services:
+  sparsedrivev2:
+    build:
+      context: .
+      dockerfile: Dockerfile.sparsedrivev2
+      args:
+        SPARSEV2_REF: "main"     # ← 固定したいコミット SHA に置換推奨
+        NAVSIM_REF: "main"       # ← 同上(NAVSIM を別 clone する場合)
+    image: sparsedrivev2:latest
+    container_name: sparsedrivev2
+    hostname: sparsedrivev2
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${SPARSEV2_GPUS:-0}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # NAVSIM 環境変数(Dockerfile の既定を上書き。実マウントに合わせる)
+      - NUPLAN_MAP_VERSION=nuplan-maps-v1.0
+      - NUPLAN_MAPS_ROOT=/workspace/dataset/maps
+      - OPENSCENE_DATA_ROOT=/workspace/dataset
+      - NAVSIM_EXP_ROOT=/workspace/exp
+      - NAVSIM_DEVKIT_ROOT=/workspace/navsim      # 同梱構成なら /workspace/SparseDriveV2
+      - HYDRA_FULL_ERROR=1
+    shm_size: "32g"
+    volumes:
+      # OpenScene データ(navsim_logs / sensor_blobs / maps)を dataset として ro
+      - type: bind
+        source: /mnt/data/openscene
+        target: /workspace/dataset
+        read_only: true
+      # 実験・データキャッシュ・メトリックキャッシュの出力(rw)
+      - type: bind
+        source: /mnt/data/navsim_exp
+        target: /workspace/exp
+        bind: { create_host_path: true }
+      # backbone / anchor files / 学習済み ckpt
+      - type: bind
+        source: /mnt/ckpts/sparsedrivev2
+        target: /workspace/SparseDriveV2/ckpts
+        read_only: true
+        bind: { create_host_path: true }
+    ipc: host
+    ulimits: { memlock: -1, stack: 67108864 }
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    working_dir: /workspace/SparseDriveV2
+    command: sleep infinity

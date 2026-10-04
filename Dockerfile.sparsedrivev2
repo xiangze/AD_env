@@ -1,0 +1,90 @@
+# ============================================================================
+# Dockerfile.sparsedrivev2  —  SparseDriveV2 (swc-17/SparseDriveV2)
+#
+# 重要: v1 とは別系統。
+#   SparseDrive v1 : nuScenes open-loop / mmdet3d / mmcv._ext
+#   SparseDriveV2  : NAVSIM(v1/v2) + nuplan-devkit / PyTorch-Lightning + Hydra
+#                    評価は PDMS / EPDMS(navtest)。データは OpenScene + nuplan maps。
+#                    → nuScenes データレイクは使わない。OPENSCENE/nuplan を使う。
+#
+# 確定済み(リポジトリの requirements.txt / environment.yml / scripts より):
+#   Python 3.9 / torch==2.0.1 / torchvision==0.15.2 / pytorch-lightning==2.2.1
+#   numpy==1.23.4 / setuptools==65.5.1 / hydra-core==1.2.0
+#   nuplan-devkit @ git ...@nuplan-devkit-v1.2
+#   学習:   navsim/planning/script/run_training.py (agent=sparsedrive_agent)
+#   評価:   scripts/evaluation/run_pdm_score_navtest_v2.sh
+#
+# 要確認(★):NAVSIM 本体の入手方法。SparseDriveV2 が navsim を同梱するか、
+#   別途 clone が要るかはリポジトリ構成次第。下では「別 clone + repo を agent として
+#   pip install -e」を既定にし、同梱なら NAVSIM_DEVKIT_ROOT を repo 側へ向ける。
+# ============================================================================
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu20.04
+
+ARG SPARSEV2_REF=main
+ARG NAVSIM_REF=main
+ENV DEBIAN_FRONTEND=noninteractive TZ=Asia/Tokyo LANG=C.UTF-8 LC_ALL=C.UTF-8
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+SHELL ["/bin/bash", "-c"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build git git-lfs wget curl ca-certificates \
+        gcc-9 g++-9 \
+        software-properties-common \
+        libgl1-mesa-glx libglib2.0-0 libgeos-dev libsm6 libxext6 libxrender-dev \
+    && add-apt-repository -y ppa:deadsnakes/ppa && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3.9 python3.9-dev python3.9-distutils \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 60 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 60 \
+    && ln -sf /usr/bin/python3.9 /usr/local/bin/python \
+    && ln -sf /usr/bin/python3.9 /usr/local/bin/python3 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.9 \
+    && pip install --no-cache-dir "setuptools==65.5.1" "pip==23.3.1" wheel
+
+ENV CUDA_HOME=/usr/local/cuda PATH=/usr/local/cuda/bin:${PATH} \
+    FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST="8.6"
+
+# torch cu118(sm_86 対応。requirements の 2.0.1 を cu118 ホイールで)
+RUN pip install --no-cache-dir \
+        torch==2.0.1 torchvision==0.15.2 \
+        --index-url https://download.pytorch.org/whl/cu118
+
+WORKDIR /workspace
+
+# --- SparseDriveV2 本体 ---
+RUN git clone https://github.com/swc-17/SparseDriveV2.git \
+    && cd SparseDriveV2 && git checkout ${SPARSEV2_REF}
+
+# --- NAVSIM devkit(★ 同梱なら不要。別 clone を既定とする) ---
+# SparseDriveV2 が navsim を内包する構成なら、この clone を消して
+# NAVSIM_DEVKIT_ROOT=/workspace/SparseDriveV2 に変更すること。
+RUN git clone https://github.com/autonomousvision/navsim.git \
+    && cd navsim && git checkout ${NAVSIM_REF} || true
+
+# --- 依存(requirements.txt が nuplan-devkit v1.2 を git 取得) ---
+WORKDIR /workspace/SparseDriveV2
+RUN pip install --no-cache-dir -r requirements.txt
+# SparseDriveV2 を agent/プラグインとして editable 導入
+RUN pip install --no-cache-dir -e . || echo "WARN: setup.py 未整備なら PYTHONPATH で通す"
+# NAVSIM を editable 導入(別 clone した場合)
+RUN [ -d /workspace/navsim ] && pip install --no-cache-dir -e /workspace/navsim || true
+# numpy を固定(nuplan/torch 依存が引き上げるのを防ぐ)
+RUN pip install --no-cache-dir "numpy==1.23.4" --no-deps
+
+# --- NAVSIM 実行に必要な環境変数(パスは実データのマウントに合わせる) ---
+ENV NUPLAN_MAP_VERSION=nuplan-maps-v1.0 \
+    NUPLAN_MAPS_ROOT=/workspace/dataset/maps \
+    OPENSCENE_DATA_ROOT=/workspace/dataset \
+    NAVSIM_EXP_ROOT=/workspace/exp \
+    NAVSIM_DEVKIT_ROOT=/workspace/navsim \
+    HYDRA_FULL_ERROR=1 \
+    PYTHONPATH=/workspace/SparseDriveV2:/workspace/navsim:${PYTHONPATH:-}
+
+RUN mkdir -p /workspace/exp /workspace/dataset ckpts
+
+RUN cd /tmp && python -c "import torch;print('torch',torch.__version__,'cuda',torch.version.cuda)"
+
+WORKDIR /workspace/SparseDriveV2
+CMD ["sleep", "infinity"]

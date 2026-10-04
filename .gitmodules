@@ -22,3 +22,6 @@
 [submodule "DriveArena"]
 	path = DriveArena
 	url = https://github.com/PJLab-ADG/DriveArena
+[submodule "SparseDriveV2"]
+	path = SparseDriveV2
+	url = https://github.com/swc-17/SparseDriveV2
