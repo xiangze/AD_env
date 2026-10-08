@@ -1,90 +1,115 @@
-# ============================================================================
-# Dockerfile.sparsedrivev2  —  SparseDriveV2 (swc-17/SparseDriveV2)
+# syntax=docker/dockerfile:1.6
+# =============================================================================
+# Dockerfile.sparsedrivev2 — SparseDriveV2 (NAVSIM トラック) / Conda 版
 #
-# 重要: v1 とは別系統。
-#   SparseDrive v1 : nuScenes open-loop / mmdet3d / mmcv._ext
-#   SparseDriveV2  : NAVSIM(v1/v2) + nuplan-devkit / PyTorch-Lightning + Hydra
-#                    評価は PDMS / EPDMS(navtest)。データは OpenScene + nuplan maps。
-#                    → nuScenes データレイクは使わない。OPENSCENE/nuplan を使う。
+#   build context = AD_env ルート。送るのは Dockerfile.sparsedrivev2.dockerignore で
+#   docker/sparsedrivev2/ のみに限定 (UniAD/WorldEngine/data を context に含めない)。
 #
-# 確定済み(リポジトリの requirements.txt / environment.yml / scripts より):
-#   Python 3.9 / torch==2.0.1 / torchvision==0.15.2 / pytorch-lightning==2.2.1
-#   numpy==1.23.4 / setuptools==65.5.1 / hydra-core==1.2.0
-#   nuplan-devkit @ git ...@nuplan-devkit-v1.2
-#   学習:   navsim/planning/script/run_training.py (agent=sparsedrive_agent)
-#   評価:   scripts/evaluation/run_pdm_score_navtest_v2.sh
+#   SparseDriveV2 は navsim devkit を同梱しているので、NAVSIM 本体を別 clone しない。
+#   (公式スクリプトは $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score_navtest_v1_fast.py
+#    等の SparseDriveV2 独自ファイルを呼ぶため、NAVSIM_DEVKIT_ROOT は SparseDriveV2 自身)
 #
-# 要確認(★):NAVSIM 本体の入手方法。SparseDriveV2 が navsim を同梱するか、
-#   別途 clone が要るかはリポジトリ構成次第。下では「別 clone + repo を agent として
-#   pip install -e」を既定にし、同梱なら NAVSIM_DEVKIT_ROOT を repo 側へ向ける。
-# ============================================================================
-FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu20.04
+#   stack: CUDA 11.8 / cuDNN 8 / Ubuntu 22.04 / Miniforge env "navsim" (Python 3.9)
+#          torch 2.0.1+cu118 / torchvision 0.15.2 / pytorch-lightning 2.2.1
+#          nuplan-devkit v1.2 / numpy 1.23.4 / deformable_aggregation CUDA ops 焼き込み
+# =============================================================================
+ARG CUDA_IMAGE=nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+FROM ${CUDA_IMAGE}
 
-ARG SPARSEV2_REF=main
-ARG NAVSIM_REF=main
-ENV DEBIAN_FRONTEND=noninteractive TZ=Asia/Tokyo LANG=C.UTF-8 LC_ALL=C.UTF-8
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
-SHELL ["/bin/bash", "-c"]
+# ---- build arguments --------------------------------------------------------
+ARG MINIFORGE_VERSION=24.11.3-0
+ARG SPARSEDRIVE_REPO=https://github.com/swc-17/SparseDriveV2.git
+# AD_env の submodule (SparseDriveV2) と同じコミット
+ARG SPARSEDRIVE_REF=696ef77924eb9e0a4b4047d013a50e9854bfa026
+# AD_env 方針どおり既定 8.6 (RTX 3080 Ti)。A100 も使うなら "8.0;8.6"
+ARG TORCH_CUDA_ARCH_LIST="8.6"
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu118
 
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Asia/Tokyo \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# ---- OS packages ------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake ninja-build git git-lfs wget curl ca-certificates \
-        gcc-9 g++-9 \
-        software-properties-common \
-        libgl1-mesa-glx libglib2.0-0 libgeos-dev libsm6 libxext6 libxrender-dev \
-    && add-apt-repository -y ppa:deadsnakes/ppa && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        python3.9 python3.9-dev python3.9-distutils \
-    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 60 \
-    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 60 \
-    && ln -sf /usr/bin/python3.9 /usr/local/bin/python \
-    && ln -sf /usr/bin/python3.9 /usr/local/bin/python3 \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+        ca-certificates curl wget git git-lfs rsync unzip tar pigz \
+        build-essential ninja-build pkg-config \
+        libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+        tzdata vim less htop tmux \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.9 \
-    && pip install --no-cache-dir "setuptools==65.5.1" "pip==23.3.1" wheel
+# ---- Miniforge (conda-forge のみ; Anaconda defaults チャネルは使わない) ------
+ENV CONDA_DIR=/opt/conda
+ENV PATH=${CONDA_DIR}/bin:${PATH}
+RUN ( wget -q "https://github.com/conda-forge/miniforge/releases/download/${MINIFORGE_VERSION}/Miniforge3-${MINIFORGE_VERSION}-Linux-$(uname -m).sh" -O /tmp/miniforge.sh \
+        || wget -q "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-$(uname -m).sh" -O /tmp/miniforge.sh ) \
+    && bash /tmp/miniforge.sh -b -p ${CONDA_DIR} \
+    && rm /tmp/miniforge.sh \
+    && conda config --system --set auto_update_conda false \
+    && conda config --system --set channel_priority strict \
+    && conda clean -afy
 
-ENV CUDA_HOME=/usr/local/cuda PATH=/usr/local/cuda/bin:${PATH} \
-    FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST="8.6"
+# ---- conda env "navsim" (python 3.9 / pip 23.3.1 : リポジトリの environment.yml と同じ) ----
+COPY docker/sparsedrivev2/environment.yml /tmp/environment.yml
+RUN conda env create -f /tmp/environment.yml \
+    && conda clean -afy \
+    && rm /tmp/environment.yml
 
-# torch cu118(sm_86 対応。requirements の 2.0.1 を cu118 ホイールで)
-RUN pip install --no-cache-dir \
+# 以降の RUN / 実行時はすべて navsim env を使う
+ENV CONDA_DEFAULT_ENV=navsim \
+    CONDA_PREFIX=${CONDA_DIR}/envs/navsim
+ENV PATH=${CONDA_PREFIX}/bin:${PATH}
+
+# ---- PyTorch (cu118 ビルドを明示的に先に入れる) --------------------------------
+# requirements.txt の torch==2.0.1 は PyPI(cu117) を引くため、nvcc 11.8 と揃えた cu118 を先に固定。
+# (2.0.1+cu118 は "torch==2.0.1" を満たすので後続の pip -r で上書きされない)
+RUN pip install --index-url ${TORCH_INDEX_URL} \
         torch==2.0.1 torchvision==0.15.2 \
-        --index-url https://download.pytorch.org/whl/cu118
+    && pip install ninja
 
+# ---- SparseDriveV2 (= NAVSIM devkit + sparsedrive agent) ---------------------
 WORKDIR /workspace
+RUN git clone ${SPARSEDRIVE_REPO} SparseDriveV2 \
+    && cd SparseDriveV2 \
+    && git checkout ${SPARSEDRIVE_REF}
 
-# --- SparseDriveV2 本体 ---
-RUN git clone https://github.com/swc-17/SparseDriveV2.git \
-    && cd SparseDriveV2 && git checkout ${SPARSEV2_REF}
-
-# --- NAVSIM devkit(★ 同梱なら不要。別 clone を既定とする) ---
-# SparseDriveV2 が navsim を内包する構成なら、この clone を消して
-# NAVSIM_DEVKIT_ROOT=/workspace/SparseDriveV2 に変更すること。
-RUN git clone https://github.com/autonomousvision/navsim.git \
-    && cd navsim && git checkout ${NAVSIM_REF} || true
-
-# --- 依存(requirements.txt が nuplan-devkit v1.2 を git 取得) ---
 WORKDIR /workspace/SparseDriveV2
-RUN pip install --no-cache-dir -r requirements.txt
-# SparseDriveV2 を agent/プラグインとして editable 導入
-RUN pip install --no-cache-dir -e . || echo "WARN: setup.py 未整備なら PYTHONPATH で通す"
-# NAVSIM を editable 導入(別 clone した場合)
-RUN [ -d /workspace/navsim ] && pip install --no-cache-dir -e /workspace/navsim || true
-# numpy を固定(nuplan/torch 依存が引き上げるのを防ぐ)
-RUN pip install --no-cache-dir "numpy==1.23.4" --no-deps
 
-# --- NAVSIM 実行に必要な環境変数(パスは実データのマウントに合わせる) ---
-ENV NUPLAN_MAP_VERSION=nuplan-maps-v1.0 \
-    NUPLAN_MAPS_ROOT=/workspace/dataset/maps \
+# requirements.txt (nuplan-devkit v1.2 含む) + navsim を editable install
+RUN pip install -r requirements.txt \
+    && pip install -e . \
+    && python -c "import numpy, torch; assert numpy.__version__.startswith('1.23'), numpy.__version__; print('numpy', numpy.__version__, 'torch', torch.__version__, 'cuda', torch.version.cuda)"
+
+# ---- CUDA ops (deformable_aggregation) をビルド時に焼き込む ------------------
+# ビルド時は GPU が見えないため FORCE_CUDA=1 + TORCH_CUDA_ARCH_LIST で nvcc に直接アーキを指定
+ENV FORCE_CUDA=1 \
+    TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
+    MAX_JOBS=4
+RUN cd navsim/agents/sparsedrive/ops \
+    && python setup.py develop \
+    && ls -1 *.so
+
+# ---- NAVSIM 環境変数 (コンテナ内レイアウト) --------------------------------
+#   /workspace/SparseDriveV2          : devkit (NAVSIM_DEVKIT_ROOT)  ← スクリプトは ckpt/ exp/ を相対参照するのでここで実行
+#   /workspace/SparseDriveV2/ckpt     : 重み / anchor  (ホストからマウント)
+#   /workspace/SparseDriveV2/exp      : cache / 学習・評価出力 (ホストからマウント) = NAVSIM_EXP_ROOT
+#   /workspace/dataset                : OPENSCENE_DATA_ROOT (ホストからマウント)
+ENV NAVSIM_DEVKIT_ROOT=/workspace/SparseDriveV2 \
+    NAVSIM_EXP_ROOT=/workspace/SparseDriveV2/exp \
     OPENSCENE_DATA_ROOT=/workspace/dataset \
-    NAVSIM_EXP_ROOT=/workspace/exp \
-    NAVSIM_DEVKIT_ROOT=/workspace/navsim \
-    HYDRA_FULL_ERROR=1 \
-    PYTHONPATH=/workspace/SparseDriveV2:/workspace/navsim:${PYTHONPATH:-}
+    NUPLAN_MAPS_ROOT=/workspace/dataset/maps \
+    NUPLAN_MAP_VERSION=nuplan-maps-v1.0 \
+    HYDRA_FULL_ERROR=1
 
-RUN mkdir -p /workspace/exp /workspace/dataset ckpts
+COPY docker/sparsedrivev2/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/sparsedrivev2/tools/ /workspace/tools/
+RUN chmod +x /usr/local/bin/entrypoint.sh /workspace/tools/*.sh \
+    && mkdir -p ckpt/kmeans exp /workspace/dataset \
+    && echo 'source /opt/conda/etc/profile.d/conda.sh && conda activate navsim' >> /root/.bashrc \
+    && echo 'cd /workspace/SparseDriveV2' >> /root/.bashrc
 
-RUN cd /tmp && python -c "import torch;print('torch',torch.__version__,'cuda',torch.version.cuda)"
-
-WORKDIR /workspace/SparseDriveV2
-CMD ["sleep", "infinity"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["bash"]

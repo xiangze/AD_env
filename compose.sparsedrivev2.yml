@@ -1,28 +1,34 @@
 # ============================================================================
-# compose.sparsedrivev2.yml  —  既存 docker-compose.yml に重ねる断片
+# compose.sparsedrivev2.yml  —  既存 docker-compose.yml に重ねる断片 (NAVSIM トラック)
 #
 #   docker compose -f docker-compose.yml -f compose.sparsedrivev2.yml \
 #                  --env-file .env up -d sparsedrivev2
+#   (Makefile.sparsedrivev2 の sv2-* ターゲット経由を推奨)
 #
-# SparseDriveV2 は NAVSIM(OpenScene + nuplan maps)を使う。nuScenes レイクではなく、
-# OpenScene データ(navsim_logs / sensor_blobs)と nuplan maps をマウントする。
+# ホスト配置 (environment-and-build.md §2 の共有データレイク):
+#   ${HOST_DATA_ROOT}/openscene/        → /workspace/dataset                (OPENSCENE_DATA_ROOT, 既定 ro)
+#     ├── maps/                            nuplan-maps-v1.0 (NUPLAN_MAPS_ROOT)
+#     ├── navsim_logs/{mini,test,trainval}/
+#     ├── sensor_blobs/{mini,test,trainval}/
+#     └── navhard_two_stage/ warmup_two_stage/
+#   ${HOST_DATA_ROOT}/navsim_exp/       → /workspace/SparseDriveV2/exp      (NAVSIM_EXP_ROOT, rw)
+#   ${HOST_CKPT_DIR}/sparsedrivev2/     → /workspace/SparseDriveV2/ckpt     (既定 ro)
+#       resnet34.bin, kmeans/*.npy|npz, sparsedrive_navsimv{1,2}.ckpt
 #
-# 想定ホスト配置(OpenScene の標準レイアウト):
-#   /mnt/data/openscene/
-#     ├── navsim_logs/{trainval,test,...}
-#     ├── sensor_blobs/{trainval,test,...}
-#     └── maps/                         (nuplan-maps-v1.0)
-#   /mnt/data/navsim_exp/               (実験・キャッシュ出力 rw)
-#   /mnt/ckpts/sparsedrivev2/           (ResNet-34 backbone / anchor files / 学習済み)
+# 公式スクリプトは ckpt/ と exp/ を「相対パス」で参照するので、両方とも
+# リポジトリ直下 (working_dir) にマウントする。ckpts/ (複数形) や /workspace/exp では動かない。
+#
+# データ/重みのダウンロード時だけ SV2_DATA_MODE=rw / SV2_CKPT_MODE=rw で書き込み可にする
+# (make sv2-data / make sv2-weights が自動で指定)。
 # ============================================================================
 services:
   sparsedrivev2:
     build:
       context: .
-      dockerfile: Dockerfile.sparsedrivev2
+      dockerfile: Dockerfile.sparsedrivev2     # context 制限は Dockerfile.sparsedrivev2.dockerignore
       args:
-        SPARSEV2_REF: "main"     # ← 固定したいコミット SHA に置換推奨
-        NAVSIM_REF: "main"       # ← 同上(NAVSIM を別 clone する場合)
+        SPARSEDRIVE_REF: ${SPARSEV2_REF:-696ef77924eb9e0a4b4047d013a50e9854bfa026}
+        TORCH_CUDA_ARCH_LIST: ${SPARSEV2_CUDA_ARCH:-8.6}
     image: sparsedrivev2:latest
     container_name: sparsedrivev2
     hostname: sparsedrivev2
@@ -30,36 +36,17 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=${SPARSEV2_GPUS:-0}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      # NAVSIM 環境変数(Dockerfile の既定を上書き。実マウントに合わせる)
-      - NUPLAN_MAP_VERSION=nuplan-maps-v1.0
-      - NUPLAN_MAPS_ROOT=/workspace/dataset/maps
-      - OPENSCENE_DATA_ROOT=/workspace/dataset
-      - NAVSIM_EXP_ROOT=/workspace/exp
-      - NAVSIM_DEVKIT_ROOT=/workspace/navsim      # 同梱構成なら /workspace/SparseDriveV2
-      - HYDRA_FULL_ERROR=1
-    shm_size: "32g"
-    volumes:
-      # OpenScene データ(navsim_logs / sensor_blobs / maps)を dataset として ro
-      - type: bind
-        source: /mnt/data/openscene
-        target: /workspace/dataset
-        read_only: true
-      # 実験・データキャッシュ・メトリックキャッシュの出力(rw)
-      - type: bind
-        source: /mnt/data/navsim_exp
-        target: /workspace/exp
-        bind: { create_host_path: true }
-      # backbone / anchor files / 学習済み ckpt
-      - type: bind
-        source: /mnt/ckpts/sparsedrivev2
-        target: /workspace/SparseDriveV2/ckpts
-        read_only: true
-        bind: { create_host_path: true }
-    ipc: host
+      - HF_TOKEN=${HF_TOKEN:-}
+      # NAVSIM 環境変数は Dockerfile 側で設定済み (NAVSIM_DEVKIT_ROOT=/workspace/SparseDriveV2 など)
+    ipc: host            # DataLoader workers / ray 用の共有メモリ (shm_size 不要)
     ulimits: { memlock: -1, stack: 67108864 }
-    deploy:
-      resources:
-        reservations:
-          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    volumes:
+      - ${HOST_DATA_ROOT:-/mnt/data}/openscene:/workspace/dataset:${SV2_DATA_MODE:-ro}
+      - ${HOST_DATA_ROOT:-/mnt/data}/navsim_exp:/workspace/SparseDriveV2/exp:rw
+      - ${HOST_CKPT_DIR:-/mnt/ckpts}/sparsedrivev2:/workspace/SparseDriveV2/ckpt:${SV2_CKPT_MODE:-ro}
+      # 開発用: AD_env の submodule (./SparseDriveV2) をソースとして使う場合はコメント解除。
+      #   イメージ内の CUDA ops は隠れるが、entrypoint が初回起動時に自動ビルドする。
+      #   その場合 ckpt/ exp/ のマウントは submodule 内に重なる (ホスト側に空ディレクトリが作られる)。
+      # - ./SparseDriveV2:/workspace/SparseDriveV2
     working_dir: /workspace/SparseDriveV2
     command: sleep infinity

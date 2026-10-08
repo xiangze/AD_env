@@ -19,7 +19,7 @@ UniAD / VAD / SparseDrive(v1, V2)/ Hydra-NeXt を、1台のワークステーシ
 | UniAD v2.0 | nuScenes | open-loop | nuScenes | 3.9 / 11.8 / 2.0.1 | 1.6.2(src) | Dockerfile.uniad2(+ base) |
 | VAD | nuScenes | open-loop | nuScenes | 3.8 / 11.1 / 1.9.1 | 1.4.0(wheel) | Dockerfile.vad |
 | SparseDrive v1 | nuScenes | open-loop | nuScenes | 3.8 / 11.6 / 1.13.0 | 1.7.1(wheel) | Dockerfile.sparsedrive |
-| SparseDriveV2 | NAVSIM | PDMS/EPDMS | OpenScene + nuplan maps | 3.9 / 11.8 / 2.0.1 | なし(nuplan-devkit) | Dockerfile.sparsedrivev2 |
+| SparseDriveV2 | NAVSIM | PDMS/EPDMS | OpenScene + nuplan maps | 3.9(conda) / 11.8 / 2.0.1+cu118 | なし(独自 deformable_aggregation ops) | Dockerfile.sparsedrivev2 |
 | Hydra-NeXt | CARLA | closed-loop | Bench2Drive(CARLA 0.9.15) | 3.8 / 11.8 / 2.0.1 | bundled | Dockerfile.closedloop |
 
 - **nuScenes トラック**(UniAD/VAD/SparseDrive v1): `/mnt/data/nuscenes` を ro 共用。
@@ -156,9 +156,12 @@ trainval は数百 GB。内蔵ディスクが逼迫する場合は外部スト�
 #   VAD / SparseDrive v1: mmdet3d test, 必ず 1 GPU 非分散
 python tools/test.py <config> <ckpt> --launcher none --eval bbox
 
-# NAVSIM(SparseDriveV2): キャッシュ → PDMS 評価
+# NAVSIM(SparseDriveV2): キャッシュ → メトリックキャッシュ → PDMS/EPDMS 評価
+#   ホストからは make sv2-cache-test sv2-metric-v1 sv2-eval-v1 (Makefile.sparsedrivev2)
+#   コンテナ内は必ず /workspace/SparseDriveV2 で実行(ckpt/ exp/ を相対参照)
 sh scripts/cache/run_dataset_caching_navtest.sh
-sh scripts/evaluation/run_pdm_score_navtest_v2.sh
+sh scripts/cache/run_metric_caching_navtest_v1.sh   # v2 は _v2
+sh scripts/evaluation/run_pdm_score_navtest_v1.sh   # v2 は _v2
 
 # CARLA(Hydra-NeXt): CARLA サーバ起動後、Bench2Drive leaderboard
 TEAM_AGENT=hydra_next_agent.py TEAM_CONFIG=<eval_cfg>+<ckpt> ALGO=hydranext \
@@ -180,6 +183,9 @@ TEAM_AGENT=hydra_next_agent.py TEAM_CONFIG=<eval_cfg>+<ckpt> ALGO=hydranext \
 | Dockerfile.sparsedrivev2 | SparseDriveV2(NAVSIM) |
 | Dockerfile.closedloop | Hydra-NeXt(CARLA 0.9.15 + Bench2Drive) |
 | compose.multimodel.yml | 共有データレイク + 3モデル + CARLA の重ね合わせ |
+| compose.sparsedrivev2.yml / Makefile.sparsedrivev2 | SparseDriveV2 の重ね合わせ / `sv2-*` ターゲット(Makefile から -include) |
+| Dockerfile.sparsedrivev2.dockerignore | SparseDriveV2 ビルド専用 context 制限(docker/sparsedrivev2/ のみ送る) |
+| docker/sparsedrivev2/ | conda env 定義・entrypoint・重み/データ DL・verify_env.py |
 | compose.sparsedrive(v2).yml | SparseDrive 各版のサービス |
 | prepare_data.sh | 生データ展開 + モデル別 info 生成(raw\|uniad\|vad\|sparsedrive\|all) |
 | Makefile.* | 各モデルのビルド/起動/評価ターゲット |
@@ -191,3 +197,21 @@ TEAM_AGENT=hydra_next_agent.py TEAM_CONFIG=<eval_cfg>+<ckpt> ALGO=hydranext \
 再現性のため、各 Dockerfile の `ARG *_REF` は追跡ブランチ(main/master)ではなく、
 **検証済みコミット SHA** に固定することを推奨。torch / mmcv / numpy / flash-attn は
 本書の表の値で固定済み。CARLA は 0.9.15 固定。
+
+---
+
+## 8. SparseDriveV2(NAVSIM トラック)固有の注意
+
+- **NAVSIM は SparseDriveV2 同梱版を使う**。SparseDriveV2 リポジトリ自体が navsim devkit(v2.0.0 ベース
+  + `navsim/agents/sparsedrive` + `run_pdm_score_navtest_v{1,2}_fast.py`)なので、
+  `NAVSIM_DEVKIT_ROOT=/workspace/SparseDriveV2`。上流 autonomousvision/navsim を別 clone・`pip install -e`
+  すると `navsim` パッケージが二重になり、公式スクリプトも見つからない。
+  WorldEngine(algengine/simengine)が使う NAVSIM v1.1 とは別物なので、コンテナは分けたままにする。
+- **CUDA ops**(`navsim/agents/sparsedrive/ops`: deformable_aggregation)は `FORCE_CUDA=1` でビルド時に焼き込み。
+  submodule をソースマウントした場合は entrypoint が起動時に再ビルドする。
+- **相対パス**: 公式スクリプトは `ckpt/…`(単数形)と `exp/…` を相対参照し、キャッシュは `$NAVSIM_EXP_ROOT` に書く。
+  両方を `/workspace/SparseDriveV2/{ckpt,exp}` にマウントし、`NAVSIM_EXP_ROOT` も同じ `exp/` に揃える。
+- **ckpt 名**: HF の `sparsedrive_navsimv1_92p2.ckpt` を評価スクリプトが参照する `sparsedrive_navsimv1.ckpt` に
+  リネームして保存(`make sv2-weights`)。
+- データ・重みは通常 ro マウント。`make sv2-data` / `make sv2-weights` だけ `SV2_DATA_MODE=rw` /
+  `SV2_CKPT_MODE=rw` の使い捨てコンテナで書き込む。

@@ -1,0 +1,4 @@
+# BuildKit: Dockerfile.sparsedrivev2 専用の .dockerignore
+# リポジトリ全体 (submodule / data / old) を context に送らない
+*
+!docker/sparsedrivev2/

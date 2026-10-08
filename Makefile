@@ -58,6 +58,9 @@ help:
 	@echo "  make eval-uniad-openloop Open-loop 評価(UniAD)"
 	@echo "  make eval-closedloop  Closed-loop 評価"
 	@echo ""
+	@echo "【SparseDriveV2 / NAVSIM】"
+	@echo "  make sv2-help         SparseDriveV2 用ターゲット一覧 (Makefile.sparsedrivev2)"
+	@echo ""
 	@echo "【クリーンアップ】"
 	@echo "  make down             全コンテナ停止"
 	@echo "  make clean            コンテナ・イメージを削除"
@@ -542,3 +545,6 @@ eval-closedloop:
 
 down-closedloop:
 	$(CL_COMPOSE) --env-file $(ENV_FILE) stop hydranext carla-server
+
+# ---- SparseDriveV2 (NAVSIM トラック) --------------------------------------
+-include Makefile.sparsedrivev2
