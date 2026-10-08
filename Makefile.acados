@@ -1,0 +1,75 @@
+# ============================================================================
+# Makefile.acados  —  E2E プランナ × acados 追従 NMPC の協調動作
+#
+# 協調は「プランナ軌道の書き出し → acados が追従制御を解く」という依存チェーン。
+# 共有ボリューム /mnt/data/cosim/{plans,control} で受け渡す。
+#
+# 典型フロー(UniAD の場合):
+#   make export-plan-uniad   # E2E 推論を回し、各フレームの将来軌道を plans/ に書き出す
+#   make acados-gen          # OCP ソルバの C コード生成+コンパイル(初回のみ)
+#   make cosim-uniad         # plans/ を読み、acados で [a,delta] を解いて control/ に出力
+#   make cosim-report        # 制御トレースの要約(solve率・飽和率など)
+# ============================================================================
+AC_COMPOSE = $(COMPOSE) -f docker-compose.yml -f compose.acados.yml
+PLANS   = /mnt/data/cosim/plans
+CONTROL = /mnt/data/cosim/control
+N      ?= 20
+TF     ?= 3.0
+WB     ?= 2.9
+
+# ---- acados イメージ ----
+build-acados:
+	$(AC_COMPOSE) --env-file $(ENV_FILE) build acados
+
+up-acados:
+	$(AC_COMPOSE) --env-file $(ENV_FILE) up -d acados
+
+# ---- OCP ソルバの C コード生成+コンパイル(初回のみ。c_generated_code/ が出来る) ----
+acados-gen: up-acados
+	$(AC_COMPOSE) --env-file $(ENV_FILE) exec acados \
+	  python -c "from uniad_vad_acados_mpc import build_solver; build_solver($(N), $(TF)); print('solver generated & compiled')"
+
+# ---- E2E プランナ軌道の書き出し ----------------------------------------
+# UniAD: 評価時に planning head の将来軌道を plans/ へダンプする。
+#   ※ UniAD/VAD は既定で軌道をファイル出力しない。plugin に小さな dump フックが要る
+#     (各 sample の SDC 予測軌道 (T,2) を npz に append)。下は想定コマンド。
+export-plan-uniad:
+	$(COMPOSE) --env-file $(ENV_FILE) exec uniad2 bash -c \
+	  "cd /workspace/UniAD && CUDA_VISIBLE_DEVICES=0 \
+	   DUMP_PLAN=/workspace/UniAD/work_dirs/plan.npz \
+	   ./tools/uniad_dist_eval.sh projects/configs/stage2_e2e/base_e2e.py \
+	     ckpts/uniad_base_e2e.pth 1"
+	cp /mnt/data/work_dirs/uniad/plan.npz $(PLANS)/uniad_plan.npz
+
+export-plan-vad:
+	$(SD_COMPOSE) --env-file $(ENV_FILE) exec vad bash -c \
+	  "cd /workspace/VAD && CUDA_VISIBLE_DEVICES=0 \
+	   DUMP_PLAN=/workspace/VAD/work_dirs/plan.npz \
+	   python tools/test.py $(VAD_CONFIG) $(VAD_CKPT) --launcher none --eval bbox"
+	cp /mnt/data/work_dirs/vad/plan.npz $(PLANS)/vad_plan.npz
+
+# ---- 協調実行(plans/ を acados に通して control/ に制御トレース) --------
+cosim-uniad: acados-gen
+	$(AC_COMPOSE) --env-file $(ENV_FILE) exec acados \
+	  python run_cosim.py --plan /data/plans/uniad_plan.npz \
+	    --out /out/uniad_control_trace.csv --N $(N) --Tf $(TF) --wheelbase $(WB)
+
+cosim-vad: acados-gen
+	$(AC_COMPOSE) --env-file $(ENV_FILE) exec acados \
+	  python run_cosim.py --plan /data/plans/vad_plan.npz \
+	    --out /out/vad_control_trace.csv --N $(N) --Tf $(TF) --wheelbase $(WB)
+
+# ---- 一気通し(UniAD) --------------------------------------------------
+cosim-uniad-all: export-plan-uniad acados-gen cosim-uniad cosim-report
+	@echo "✓ UniAD → acados 協調実行 完了"
+
+# ---- 制御トレースの要約 ------------------------------------------------
+cosim-report:
+	$(AC_COMPOSE) --env-file $(ENV_FILE) exec acados python -c \
+	  "import csv,glob,statistics as st; \
+f=sorted(glob.glob('/out/*_control_trace.csv'))[-1]; \
+r=list(csv.DictReader(open(f))); \
+ok=sum(1 for x in r if x['solver_status']=='0'); \
+a=[float(x['a_mps2']) for x in r]; d=[float(x['delta_rad']) for x in r]; \
+print('file',f,'frames',len(r),'solved_ok',ok); \
+print('a[min,max]',min(a),max(a),'delta[min,max]',min(d),max(d))"

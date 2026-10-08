@@ -1,0 +1,46 @@
+# ============================================================================
+# Dockerfile.acados  —  acados 追従 NMPC(E2E プランナの下流制御器)
+#
+# 役割:
+#   UniAD/VAD が出した将来 ego 軌道(waypoints)を参照とする追従 NMPC を acados で解く。
+#   E2E スタック(cu118/torch)とは分離した軽量イメージ。GPU 不要(acados は CPU ソルバ)。
+#
+# 中身:
+#   - acados 本体をソースビルド(libacados.so + HPIPM/BLASFEO)
+#   - acados_template(Python iface)+ casadi
+#   - 橋渡しスクリプト uniad_vad_acados_mpc.py を同梱
+# ============================================================================
+FROM python:3.10-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# --- acados 本体(タグ固定でビルド) ---
+ARG ACADOS_REF=v0.4.0
+WORKDIR /opt
+RUN git clone https://github.com/acados/acados.git \
+    && cd acados && git checkout ${ACADOS_REF} \
+    && git submodule update --recursive --init
+WORKDIR /opt/acados/build
+RUN cmake -DACADOS_WITH_QPOASES=ON -DACADOS_INSTALL_DIR=/opt/acados .. \
+    && make install -j4
+
+ENV ACADOS_SOURCE_DIR=/opt/acados \
+    LD_LIBRARY_PATH=/opt/acados/lib:${LD_LIBRARY_PATH:-} \
+    ACADOS_INSTALL_DIR=/opt/acados
+
+# Python iface + casadi
+RUN pip install --no-cache-dir -e /opt/acados/interfaces/acados_template \
+    && pip install --no-cache-dir casadi numpy scipy
+
+# tera テンプレートレンダラ(C コード生成に必要。初回 import 時に取得される場合もある)
+RUN pip install --no-cache-dir pyyaml
+
+# 橋渡しスクリプト
+WORKDIR /workspace/mpc
+COPY uniad_vad_acados_mpc.py /workspace/mpc/
+COPY run_cosim.py           /workspace/mpc/
+
+CMD ["sleep", "infinity"]

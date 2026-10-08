@@ -1,0 +1,29 @@
+# ============================================================================
+# compose.acados.yml  —  acados 追従 NMPC サービス(E2E の下流制御器)
+#   docker compose -f docker-compose.yml -f compose.acados.yml --env-file .env up -d acados
+#
+# GPU 不要。E2E プランナ出力と制御トレースの受け渡しは共有ボリュームで行う。
+#   /mnt/data/cosim/plans/    : プランナが書き出す軌道(E2E 側から rw)
+#   /mnt/data/cosim/control/  : acados が書く制御トレース(rw)
+# ============================================================================
+services:
+  acados:
+    build:
+      context: .
+      dockerfile: Dockerfile.acados
+      args:
+        ACADOS_REF: "v0.4.0"
+    image: acados-mpc:latest
+    container_name: acados
+    volumes:
+      - type: bind
+        source: /mnt/data/cosim/plans
+        target: /data/plans
+        read_only: true
+        bind: { create_host_path: true }
+      - type: bind
+        source: /mnt/data/cosim/control
+        target: /out
+        bind: { create_host_path: true }
+    working_dir: /workspace/mpc
+    command: sleep infinity
