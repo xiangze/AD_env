@@ -1,0 +1,30 @@
+# ============================================================================
+# Makefile.sparsedrive  —  SparseDrive v1(nuScenes open-loop)
+# ============================================================================
+SD_COMPOSE = $(COMPOSE) -f docker-compose.yml -f compose.sparsedrive.yml
+
+build-sparsedrive:
+	$(SD_COMPOSE) --env-file $(ENV_FILE) build sparsedrive
+
+up-sparsedrive:
+	$(SD_COMPOSE) --env-file $(ENV_FILE) up -d sparsedrive
+
+# info 生成 + anchor(kmeans)。実スクリプト名は repo の docs に合わせる
+#   SparseDrive 標準: sh scripts/create_data.sh 相当 + tools/kmeans/*
+prep-sparsedrive: up-sparsedrive
+	$(SD_COMPOSE) --env-file $(ENV_FILE) exec sparsedrive bash -c \
+	  "cd /workspace/SparseDrive && \
+	   python tools/data_converter/nuscenes_converter.py nuscenes \
+	     --root-path ./data/nuscenes --out-dir ./data/infos \
+	     --extra-tag nuscenes --version v1.0-mini --canbus ./data/nuscenes && \
+	   ( [ -f tools/kmeans/kmeans_plan.py ] && python tools/kmeans/kmeans_plan.py || true ) && \
+	   ( [ -f tools/kmeans/kmeans_det.py ]  && python tools/kmeans/kmeans_det.py  || true )"
+
+# 評価(1 GPU。config/ckpt は repo の model zoo に合わせる)
+SD_CONFIG ?= projects/configs/sparsedrive_small_stage2.py
+SD_CKPT   ?= ckpts/sparsedrive_stage2.pth
+eval-sparsedrive: up-sparsedrive
+	$(SD_COMPOSE) --env-file $(ENV_FILE) exec sparsedrive bash -c \
+	  "cd /workspace/SparseDrive && CUDA_VISIBLE_DEVICES=0 \
+	   python tools/test.py $(SD_CONFIG) $(SD_CKPT) --eval bbox \
+	   2>&1 | tee work_dirs/eval_sparsedrive_$$(date +%Y%m%d_%H%M%S).log"

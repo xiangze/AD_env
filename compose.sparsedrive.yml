@@ -1,0 +1,48 @@
+# ============================================================================
+# compose.sparsedrive.yml  —  SparseDrive v1(nuScenes open-loop)サービス
+#   docker compose -f docker-compose.yml -f compose.sparsedrive.yml \
+#                  --env-file .env up -d sparsedrive
+#
+# nuScenes 生データは UniAD/VAD と同じ /mnt/data/nuscenes を ro 共用。
+# info/anchor は SparseDrive 専用ディレクトリに rw。
+# ============================================================================
+services:
+  sparsedrive:
+    build:
+      context: .
+      dockerfile: Dockerfile.sparsedrive
+      args:
+        SPARSEDRIVE_REF: "main"      # ← 固定したいコミット SHA に置換推奨
+    image: sparsedrive:latest
+    container_name: sparsedrive
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${SPARSE_GPUS:-0}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    shm_size: "16g"
+    volumes:
+      - type: bind
+        source: /mnt/data/nuscenes
+        target: /workspace/SparseDrive/data/nuscenes
+        read_only: true
+      - type: bind
+        source: /mnt/data/infos/sparsedrive
+        target: /workspace/SparseDrive/data/infos
+        bind: { create_host_path: true }
+      - type: bind
+        source: /mnt/ckpts/sparsedrive
+        target: /workspace/SparseDrive/ckpts
+        read_only: true
+        bind: { create_host_path: true }
+      - type: bind
+        source: /mnt/data/work_dirs/sparsedrive
+        target: /workspace/SparseDrive/work_dirs
+        bind: { create_host_path: true }
+    ipc: host
+    ulimits: { memlock: -1, stack: 67108864 }
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    working_dir: /workspace/SparseDrive
+    command: sleep infinity

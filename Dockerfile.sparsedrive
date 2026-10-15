@@ -1,0 +1,86 @@
+# ============================================================================
+# Dockerfile.sparsedrive  —  SparseDrive v1 (nuScenes open-loop)
+#
+# スタック(以前ビルドした構成に準拠):
+#   Python 3.8 / CUDA 11.6 / torch 1.13.0+cu116 / mmcv-full 1.7.1(wheel)
+#   mmdet 2.28.2 / mmdet3d 1.0.0rc6 / flash-attn / Deformable Aggregation(自前 op)
+#
+# UniAD との違い(楽な点):
+#   mmcv-full 1.7.1 は cu116/torch1.13 の cp38 ビルド済み wheel があるので、
+#   mmcv._ext のソースビルド地獄は不要。Python を 3.8 に保つのが条件。
+# 固有の難所:
+#   (1) SparseDrive 自前の CUDA op(projects/.../ops)を setup.py develop でビルド
+#   (2) flash-attn のビルド(時間・メモリ食い。MAX_JOBS を絞る)
+#   → いずれも nvcc がある devel ベース + FORCE_CUDA で、イメージに焼き込む。
+#
+# データは nuScenes レイク(/mnt/data/nuscenes)を ro 共用。info/anchor のみ生成。
+# ============================================================================
+FROM nvidia/cuda:11.6.1-cudnn8-devel-ubuntu20.04
+
+ARG SPARSEDRIVE_REF=main
+ENV DEBIAN_FRONTEND=noninteractive TZ=Asia/Tokyo LANG=C.UTF-8 LC_ALL=C.UTF-8
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+SHELL ["/bin/bash", "-c"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build git git-lfs wget curl ca-certificates \
+        gcc-9 g++-9 \
+        python3.8 python3.8-dev python3.8-distutils \
+        libgl1-mesa-glx libglib2.0-0 libgeos-dev libsm6 libxext6 libxrender-dev \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 60 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 60 \
+    && ln -sf /usr/bin/python3.8 /usr/local/bin/python \
+    && ln -sf /usr/bin/python3.8 /usr/local/bin/python3 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py | python3.8 \
+    && pip install --no-cache-dir "setuptools==59.5.0" wheel
+
+ENV CUDA_HOME=/usr/local/cuda PATH=/usr/local/cuda/bin:${PATH} \
+    FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST="8.6" MAX_JOBS=4
+
+# torch 1.13.0 + cu116
+RUN pip install --no-cache-dir \
+        torch==1.13.0+cu116 torchvision==0.14.0+cu116 \
+        --extra-index-url https://download.pytorch.org/whl/cu116
+
+# mmcv-full 1.7.1(cu116/torch1.13 のビルド済み wheel → _ext 同梱)
+RUN pip install --no-cache-dir mmcv-full==1.7.1 \
+    -f https://download.openmmlab.com/mmcv/dist/cu116/torch1.13/index.html \
+    && cd /tmp && python -c "from mmcv import _ext; print('mmcv._ext OK')"
+
+RUN pip install --no-cache-dir mmdet==2.28.2 mmsegmentation==0.30.0
+
+# mmdet3d 1.0.0rc6(ソースビルド。SparseDrive 指定版)
+WORKDIR /build
+RUN git clone https://github.com/open-mmlab/mmdetection3d.git \
+    && cd mmdetection3d && git checkout -f v1.0.0rc6
+WORKDIR /build/mmdetection3d
+RUN pip install --no-cache-dir --no-build-isolation -v -e .
+
+# --- SparseDrive 本体 ---
+WORKDIR /workspace
+RUN git clone https://github.com/swc-17/SparseDrive.git \
+    && cd SparseDrive && git checkout ${SPARSEDRIVE_REF}
+WORKDIR /workspace/SparseDrive
+
+# 依存(flash-attn を含む。requirement ファイル名は repo に合わせる)
+RUN pip install --no-cache-dir -r requirement.txt || \
+    pip install --no-cache-dir -r requirements.txt
+
+# flash-attn が requirement で入らない/失敗する場合の保険(版は repo 指定に合わせる):
+#   RUN pip install --no-cache-dir flash-attn==<repo指定> --no-build-isolation
+
+# numpy を 1.x に固定(torch1.13 系は numpy<2 前提)
+RUN pip install --no-cache-dir "numpy==1.23.5" --no-deps
+
+# --- Deformable Aggregation(SparseDrive 自前 CUDA op)を焼き込み ---
+# パスは repo の手順に合わせる(projects/mmdet3d_plugin/ops が標準)
+RUN cd projects/mmdet3d_plugin/ops && python setup.py develop \
+    && cd /tmp && python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+
+RUN mkdir -p ckpts data
+
+ENV PYTHONPATH=/workspace/SparseDrive:${PYTHONPATH:-}
+WORKDIR /workspace/SparseDrive
+CMD ["sleep", "infinity"]
