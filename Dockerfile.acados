@@ -41,6 +41,7 @@ RUN pip install --no-cache-dir pyyaml
 # 橋渡しスクリプト
 WORKDIR /workspace/mpc
 COPY uniad_vad_acados_mpc.py /workspace/mpc/
-COPY run_cosim.py           /workspace/mpc/
+COPY run_cosim.py            /workspace/mpc/
+COPY lqr_tracker.py          /workspace/mpc/
 
 CMD ["sleep", "infinity"]

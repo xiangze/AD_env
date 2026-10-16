@@ -548,3 +548,5 @@ down-closedloop:
 
 # ---- SparseDriveV2 (NAVSIM トラック) --------------------------------------
 -include Makefile.sparsedrivev2
+include Makefile.acados
+include Makefile.acados.lqr-additions.mk

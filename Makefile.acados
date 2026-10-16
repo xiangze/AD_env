@@ -10,6 +10,8 @@
 #   make cosim-uniad         # plans/ を読み、acados で [a,delta] を解いて control/ に出力
 #   make cosim-report        # 制御トレースの要約(solve率・飽和率など)
 # ============================================================================
+COMPOSE  ?= docker compose
+ENV_FILE ?= .env
 AC_COMPOSE = $(COMPOSE) -f docker-compose.yml -f compose.acados.yml
 PLANS   = /mnt/data/cosim/plans
 CONTROL = /mnt/data/cosim/control

@@ -75,6 +75,7 @@ services:
       - ./data/uniad_infos/others:/workspace/UniAD/data/others #:ro
       - /mnt/data/infos:/workspace/UniAD/data/infos
       - /mnt/data/others:/workspace/UniAD/data/others
+      - ./tools_cosim:/workspace/tools_cosim:ro
     environment:
       - CUDA_VISIBLE_DEVICES=${UNIAD_GPUS:-0,1,2,3,4,5,6,7}
       - MASTER_ADDR=${MASTER_ADDR:-localhost}
@@ -223,6 +224,7 @@ services:
         - ${HOST_DATA_ROOT:-./data}/can_bus:/workspace/VAD/data/can_bus #:ro
         - ${HOST_CKPT_DIR:-./ckpts}/vad:/workspace/VAD/ckpts
         - ./work_dirs/vad:/workspace/VAD/work_dirs
+        - ./tools_cosim:/workspace/VAD/tools_cosim:ro
       ipc: host
       ulimits:
         memlock: -1
